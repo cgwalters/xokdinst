@@ -1,35 +1,91 @@
-use std::{io, fs};
-use std::str::FromStr;
+use std::{fs, io};
+use std::borrow::Cow;
+use std::collections::HashMap;
 extern crate structopt;
 use structopt::StructOpt;
+#[macro_use]
+extern crate clap;
 use directories;
+#[macro_use]
+extern crate failure;
 use failure::Fallible;
 #[macro_use]
 extern crate lazy_static;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_yaml;
 
 lazy_static! {
     static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
 }
 
-/// The name of the config used
-static DEFAULT_CONFIG : &str = "config.yaml";
+/// Holds extra keys from a map we didn't explicitly parse
+type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
 
-#[derive(Debug, StructOpt, PartialEq)]
-enum Platform {
-    Libvirt,
-    AWS,
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum InstallConfigPlatform {
+    Libvirt(SerdeYamlMap),
+    AWS(SerdeYamlMap),
 }
 
-impl FromStr for Platform {
-    type Err = &'static str;
+#[derive(Deserialize)]
+struct InstallConfigMachines {
+    name: String,
+    replicas: u32,
+}
 
-    fn from_str(s: &str) -> Result<Platform, &'static str> {
-        match s {
-            "libvirt" => Ok(Platform::Libvirt),
-            "aws" => Ok(Platform::AWS),
-            _ => Err("invalid platform"),
+#[derive(Deserialize)]
+struct InstallConfig {
+    apiVersion: String,
+    baseDomain: String,
+    compute: InstallConfigMachines,
+    controlPlane: InstallConfigMachines,
+    platform: InstallConfigPlatform,
+    pullSecret: String,
+    sshKey: Option<String>,
+
+    #[serde(flatten)]
+    extra: SerdeYamlMap
+}
+
+arg_enum! {
+    #[derive(Debug, Clone, PartialEq)]
+    enum Platform {
+        Libvirt,
+        AWS,
+    }
+}
+
+impl InstallConfigPlatform {
+    fn to_platform(&self) -> Platform {
+        match self {
+            InstallConfigPlatform::Libvirt(_) => Platform::Libvirt,
+            InstallConfigPlatform::AWS(_) => Platform::AWS,
         }
     }
+}
+
+#[derive(Debug, StructOpt)]
+struct LaunchOpts {
+    /// Name of the cluster to launch
+    name: String,
+    #[structopt(short = "p", raw(possible_values = "&Platform::variants()", case_insensitive = "true"))]
+    platform: Option<Platform>,
+    #[structopt(short = "c", long = "config")]
+    /// The name of the base configuration (overrides platform)
+    config: Option<String>,
+    /// Override the release image (for development/testing)
+    release_image: Option<String>,
+}
+
+#[derive(Debug, StructOpt)]
+struct GenConfigOpts {
+    /// Name for this configuration; if not specified, will be named config-<platform>.yaml
+    name: Option<String>,
+    /// Overwrite an existing default configuration
+    overwrite: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -37,24 +93,82 @@ impl FromStr for Platform {
 #[structopt(rename_all = "kebab-case")]
 /// Main options struct
 enum Opt {
+    /// Generate the default configuration for a given platform
+    GenConfig(GenConfigOpts),
     /// List all configuration sources
-    GetConfigs,
+    ListConfigs,
     /// List all clusters
     List,
     /// Launch a new cluster
-    Launch {
-        name: String,
-        #[structopt(short = "p", long = "platform")]
-        platform: Option<Platform>,
-        #[structopt(short = "c", long = "config")]
-        /// The name of the base configuration (overrides platform)
-        config: Option<String>,
-        release_image: Option<String>,
-    },
+    Launch(LaunchOpts),
     /// Destroy a running cluster
     Destroy {
         name: String,
     },
+}
+
+fn cmd_installer() -> std::process::Command {
+    let localbin : &std::path::Path = "bin/openshift-install".as_ref();
+    let cmd = if localbin.exists() {
+        localbin
+    } else {
+        "openshift-install".as_ref()
+    };
+    let mut cmd = std::process::Command::new(cmd);
+    // Override the libvirt defaults
+    // TODO(walters) compute these from what's available on the host
+    // https://github.com/openshift/installer/pull/785
+    cmd.env("TF_VAR_libvirt_master_memory", "8192")
+        .env("TF_VAR_libvirt_master_vcpu", "4");
+    cmd
+}
+
+fn run_installer(cmd: &mut std::process::Command) -> Fallible<()> {
+    let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
+    if !status.success() {
+        bail!("openshift-install failed")
+    }
+    Ok(())
+}
+
+/// Return the filename for a given config, using platform name if necessary
+fn get_config_name(name: &Option<String>, platform: &Platform) -> String {
+    if let Some(name) = name {
+        format!("config-{}.yaml", name)
+    } else {
+        format!("config-{}.yaml", platform.to_string().to_lowercase())
+    }
+}
+
+/// Create a config-X.yaml
+fn generate_config(o: GenConfigOpts) -> Fallible<String> {
+    if let Some(name) = o.name.as_ref() {
+        let path = APPDIRS.config_dir().join(&name);
+        if !o.overwrite && path.exists() {
+            bail!("Configuration '{}' already exists and overwrite not specified", name);
+        }
+    }
+
+    let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
+    println!("Executing `openshift-install create install-config`");
+    let mut cmd = cmd_installer();
+    cmd.args(&["create", "install-config", "--dir"]);
+    cmd.arg(tmpd.path());
+    run_installer(&mut cmd)?;
+
+    let tmp_config_path = tmpd.path().join("install-config.yaml");
+    let parsed_config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(tmp_config_path)?))?;
+    let platform = parsed_config.platform.to_platform();
+    let name = get_config_name(&o.name, &platform);
+    let path = APPDIRS.config_dir().join(&name);
+    if !o.overwrite && path.exists() {
+        bail!("Configuration '{}' already exists and overwrite not specified", name);
+    }
+
+    fs::create_dir_all(APPDIRS.config_dir())?;
+    fs::copy(tmpd.path().join("install-config.yaml"), path)?;
+
+    Ok(platform.to_string().to_lowercase())
 }
 
 /// Get all configurations
@@ -63,7 +177,7 @@ fn get_configs() -> Fallible<Vec<String>> {
     for entry in fs::read_dir(APPDIRS.config_dir())? {
         let entry = entry?;
         if let Some(name) = entry.file_name().to_str() {
-            if name == DEFAULT_CONFIG || (name.starts_with("config-") && name.ends_with(".yaml")) {
+            if name.starts_with("config-") && name.ends_with(".yaml") {
                 r.push(String::from(name));
             }
         }
@@ -97,16 +211,64 @@ fn print_list(header: &str, l: &[String]) {
     }
 }
 
+/// 🚀
+fn launch(o: LaunchOpts) -> Fallible<()> {
+    fs::create_dir_all(APPDIRS.config_dir())?;
+    let clusterdir = APPDIRS.config_dir().join(&o.name);
+    if clusterdir.exists() {
+        bail!("Cluster {} already exists, use destroy to remove it", o.name.as_str());
+    }
+    let configs = get_configs()?;
+    let config_name = if o.config.is_none() && configs.len() == 0 {
+        println!("No configurations found; generating one now");
+        Cow::Owned(generate_config(GenConfigOpts {
+            name: None,
+            overwrite: false,
+        })?)
+    } else {
+        if let Some(name) = o.config.as_ref() {
+            Cow::Borrowed(name)
+        } else if configs.len() == 1 {
+            Cow::Borrowed(&configs[0])
+        } else {
+            bail!("Have multiple configs, and no config specified")
+        }
+    };
+    let config_path = APPDIRS.config_dir().join(config_name.as_str());
+    if !config_path.exists() {
+        bail!("No such configuration: {}", config_name);
+    }
+
+    fs::create_dir(&clusterdir)?;
+    fs::copy(config_path, clusterdir.join("install-config.yaml"))?;
+
+    let mut cmd = cmd_installer();
+    if let Some(image) = o.release_image {
+        cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
+    }
+    cmd.args(&["create", "cluster", "--dir"]);
+    cmd.arg(clusterdir);
+    run_installer(&mut cmd)?;
+
+    Ok(())
+}
+
 /// Primary entrypoint
 fn main() -> Fallible<()> {
     match Opt::from_args() {
-        Opt::GetConfigs => {
+        Opt::GenConfig(o) => {
+            generate_config(o)?;
+        },
+        Opt::ListConfigs => {
             let configs = get_configs()?;
             print_list("configs", &configs.as_slice());
         },
         Opt::List => {
             let clusters = get_clusters()?;
             print_list("clusters", &clusters.as_slice());
+        },
+        Opt::Launch(o) => {
+            launch(o)?;
         },
         _ => unimplemented!(),
     }
