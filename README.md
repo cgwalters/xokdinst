@@ -21,7 +21,7 @@ Why
 
 The primary feature is that `xokdinst` by default has an opinionated place
 to store configuration, in platform-specific "appdirs" as defined by
-the Rust [appdirs crate](https://crates.io/crates/appdirs) - e.g. on Linux/Unix
+the Rust [directories crate](https://crates.io/crates/directories) - e.g. on Linux/Unix
 this is `~/.config/xokdinst`.
 
 Basically we're always using the `--dir` option of the upstream installer.
