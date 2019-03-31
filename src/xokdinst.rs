@@ -31,20 +31,23 @@ enum InstallConfigPlatform {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct InstallConfigMachines {
     name: String,
     replicas: u32,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct InstallConfig {
-    apiVersion: String,
-    baseDomain: String,
-    compute: InstallConfigMachines,
-    controlPlane: InstallConfigMachines,
+    api_version: String,
+    base_domain: String,
+    compute: Vec<InstallConfigMachines>,
+    control_plane: InstallConfigMachines,
     platform: InstallConfigPlatform,
-    pullSecret: String,
-    sshKey: Option<String>,
+    pull_secret: String,
+    ssh_key: Option<String>,
 
     #[serde(flatten)]
     extra: SerdeYamlMap
@@ -101,9 +104,16 @@ enum Opt {
     List,
     /// Launch a new cluster
     Launch(LaunchOpts),
+    Kubeconfig {
+        /// Print the kubeconfig path for this cluster
+        name: String,
+    },
     /// Destroy a running cluster
     Destroy {
+        /// Name of cluster to destroy
         name: String,
+        /// Ignore failure to delete cluster, remove directory anyways
+        force: bool
     },
 }
 
@@ -168,7 +178,7 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
     fs::create_dir_all(APPDIRS.config_dir())?;
     fs::copy(tmpd.path().join("install-config.yaml"), path)?;
 
-    Ok(platform.to_string().to_lowercase())
+    Ok(name)
 }
 
 /// Get all configurations
@@ -247,9 +257,41 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
     }
     cmd.args(&["create", "cluster", "--dir"]);
-    cmd.arg(clusterdir);
+    cmd.arg(&clusterdir);
+    println!("Executing `openshift-install create cluster`");
     run_installer(&mut cmd)?;
 
+    Ok(())
+}
+
+/// Ensure base configdir, and get the path to a cluster
+fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
+    fs::create_dir_all(APPDIRS.config_dir())?;
+    let clusterdir = APPDIRS.config_dir().join(name);
+    if !clusterdir.exists() {
+        bail!("No such cluster: {}", name);
+    }
+    Ok(clusterdir.into_boxed_path())
+}
+
+/// Destroy a cluster
+fn destroy(name: &str, force: bool) -> Fallible<()> {
+    let clusterdir = get_clusterdir(name)?;
+
+    let mut cmd = cmd_installer();
+    cmd.args(&["destroy", "cluster", "--dir"]);
+    cmd.arg(&*clusterdir);
+    println!("Executing `openshift-install destroy cluster`");
+    let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
+    if !status.success() {
+        if !force {
+            bail!("openshift-install failed")
+        } else {
+            eprintln!("Warning: destroy cluster failed, continuing anyways")
+        }
+    }
+
+    fs::remove_dir_all(clusterdir)?;
     Ok(())
 }
 
@@ -270,7 +312,13 @@ fn main() -> Fallible<()> {
         Opt::Launch(o) => {
             launch(o)?;
         },
-        _ => unimplemented!(),
+        Opt::Destroy { name, force } => {
+            destroy(&name, force)?;
+        },
+        Opt::Kubeconfig { name } => {
+            let clusterdir = get_clusterdir(&name)?;
+            println!("{}", clusterdir.join("auth/kubeconfig").to_str().unwrap());
+        },
     }
 
     Ok(())
