@@ -1,4 +1,5 @@
 use std::{fs, io};
+use std::io::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use structopt::StructOpt;
@@ -20,21 +21,30 @@ lazy_static! {
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum InstallConfigPlatform {
     Libvirt(SerdeYamlMap),
     AWS(SerdeYamlMap),
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[allow(dead_code)]
 struct InstallConfigMachines {
     name: String,
     replicas: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[allow(dead_code)]
+struct InstallConfigMetadata {
+    name: String,
+
+    #[serde(flatten)]
+    extra: Option<SerdeYamlMap>,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct InstallConfig {
@@ -42,6 +52,7 @@ struct InstallConfig {
     base_domain: String,
     compute: Vec<InstallConfigMachines>,
     control_plane: InstallConfigMachines,
+    metadata: Option<InstallConfigMetadata>,
     platform: InstallConfigPlatform,
     pull_secret: String,
     ssh_key: Option<String>,
@@ -110,6 +121,7 @@ enum Opt {
         /// Name of cluster to destroy
         name: String,
         /// Ignore failure to delete cluster, remove directory anyways
+        #[structopt(short = "f", long = "force")]
         force: bool
     },
 }
@@ -164,7 +176,7 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
     run_installer(&mut cmd)?;
 
     let tmp_config_path = tmpd.path().join("install-config.yaml");
-    let parsed_config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(tmp_config_path)?))?;
+    let mut parsed_config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(tmp_config_path)?))?;
     let platform = parsed_config.platform.to_platform();
     let name = get_config_name(&o.name, &platform);
     let path = APPDIRS.config_dir().join(&name);
@@ -172,8 +184,16 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
         bail!("Configuration '{}' already exists and overwrite not specified", name);
     }
 
+    // Remove the metadata/name value, we want this one to be a template
+    match parsed_config.metadata.take() {
+        None => bail!("Didn't find expected metadata key"),
+        Some(_) => {}
+    };
+
     fs::create_dir_all(APPDIRS.config_dir())?;
-    fs::copy(tmpd.path().join("install-config.yaml"), path)?;
+    let mut w = io::BufWriter::new(fs::File::create(path)?);
+    serde_yaml::to_writer(&mut w, &parsed_config)?;
+    w.flush()?;
 
     Ok(name)
 }
@@ -232,6 +252,8 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
             name: None,
             overwrite: false,
         })?)
+    } else if let Some(platform) = o.platform.as_ref() {
+        Cow::Owned(get_config_name(&None, &platform))
     } else {
         if let Some(name) = o.config.as_ref() {
             Cow::Borrowed(name)
@@ -246,8 +268,16 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         bail!("No such configuration: {}", config_name);
     }
 
+    let mut config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(config_path)?))?;
+    config.metadata = Some(InstallConfigMetadata {
+        name: o.name.to_string(),
+        extra: None,
+    });
+
     fs::create_dir(&clusterdir)?;
-    fs::copy(config_path, clusterdir.join("install-config.yaml"))?;
+    let mut w = io::BufWriter::new(fs::File::create(clusterdir.join("install-config.yaml"))?);
+    serde_yaml::to_writer(&mut w, &config)?;
+    w.flush()?;
 
     let mut cmd = cmd_installer();
     if let Some(image) = o.release_image {
