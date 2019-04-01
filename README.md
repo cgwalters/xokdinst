@@ -16,7 +16,7 @@ $ xokdinst launch mycluster
 
 For more commands, just run `xokdinst --help`.
 
-Why
+Features/differences over openshift-installer
 ---
 
 The primary feature is that `xokdinst` by default has an opinionated place
@@ -38,8 +38,28 @@ For example, running this:
 $ xokdinst launch mycluster2
 ```
 
-Will create a second cluster that inherits everything except the name
-from the base.
+Will create a second cluster that inherits everything except the name from the
+base. If for example the first cluster you created is for the AWS platform,
+the `mycluster2` will launch using `config-aws.yaml`.
+
+If you want to use multiple platforms (e.g. `aws` and `libvirt`), then you'll
+want to make a new config:
+
+```
+$ xokdinst gen-config
+```
+
+This time choose `libvirt` as a platform, and the config generated will be
+`config-libvirt.yaml`.
+
+From now on, you will need to specify the platform any time you launch
+a cluster, e.g.
+
+```
+$ xokdinst launch -p aws mycluster2
+
+$ xokdinst launch -p libvirt mycluster3
+```
 
 Why not add this to the installer upstream?
 ---
