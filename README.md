@@ -4,6 +4,20 @@ xokdinst
 Wraps [openshift-installer](https://github.com/openshift/installer/) with a
 few added features.
 
+Installation
+---
+
+You'll need `cargo`; you can get it from `yum -y install cargo` or [rustup](https://rustup.rs/).
+Operating under the theory that you're a developer/tester/etc of OpenShift
+itself, we'll clone this git repository so you can help contribute a bit more
+easily to the wrapper, then install from that clone:
+
+```
+$ git clone https://github.com/cgwalters/xokdinst
+$ cd xokdinst
+$ cargo install --path .
+```
+
 Quick start
 ---
 
