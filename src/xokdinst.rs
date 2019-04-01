@@ -1,7 +1,6 @@
 use std::{fs, io};
 use std::borrow::Cow;
 use std::collections::HashMap;
-extern crate structopt;
 use structopt::StructOpt;
 #[macro_use]
 extern crate clap;
@@ -11,10 +10,8 @@ extern crate failure;
 use failure::Fallible;
 #[macro_use]
 extern crate lazy_static;
-extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate serde_yaml;
 
 lazy_static! {
     static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
