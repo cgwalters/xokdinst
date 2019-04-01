@@ -82,12 +82,16 @@ impl InstallConfigPlatform {
 struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
+
     #[structopt(short = "p", raw(possible_values = "&Platform::variants()", case_insensitive = "true"))]
     platform: Option<Platform>,
+
     #[structopt(short = "c", long = "config")]
     /// The name of the base configuration (overrides platform)
     config: Option<String>,
+
     /// Override the release image (for development/testing)
+    #[structopt(short = "I", long = "release-image")]
     release_image: Option<String>,
 }
 
@@ -120,6 +124,7 @@ enum Opt {
     Destroy {
         /// Name of cluster to destroy
         name: String,
+
         /// Ignore failure to delete cluster, remove directory anyways
         #[structopt(short = "f", long = "force")]
         force: bool
