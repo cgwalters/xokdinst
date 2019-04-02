@@ -38,8 +38,10 @@ to store configuration, in platform-specific "appdirs" as defined by
 the Rust [directories crate](https://crates.io/crates/directories) - e.g. on Linux/Unix
 this is `~/.config/xokdinst`.
 
-Basically we're always using the `--dir` option of the upstream installer.
-This makes it more convenient to manage multiple clusters.
+This builds on the upstream installer support for [multiple invocations](https://github.com/openshift/installer/blob/3d904d3364e68251cc067782344b72b626e65573/docs/user/overview.md#multiple-invocations).
+We're always using the `--dir` option of the upstream installer and naming that
+directory after the cluster name. This makes it more convenient to manage
+multiple clusters.
 
 `xokdinst` also has the concept of a "default config" for a given platform.
 And if you only have used one platform, it becomes the default config.
