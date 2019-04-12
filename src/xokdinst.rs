@@ -268,10 +268,13 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
             bail!("Have multiple configs, and no config specified")
         }
     };
-    let config_path = APPDIRS.config_dir().join(config_name.as_str());
-    if !config_path.exists() {
-        bail!("No such configuration: {}", config_name);
-    }
+    let full_name = Cow::Owned(format!("config-{}.yaml", config_name));
+    let config_path : Option<_> = [&config_name, &full_name]
+        .iter().map(|c| APPDIRS.config_dir().join(c.as_str())).filter(|c| c.exists()).next();
+    let config_path = match config_path {
+        Some(x) => x,
+        None => bail!("No such configuration: {}", config_name),
+    };
 
     let mut config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(config_path)?))?;
     config.metadata = Some(InstallConfigMetadata {
