@@ -288,6 +288,10 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     w.flush()?;
 
     let mut cmd = cmd_installer();
+    cmd.arg("version");
+    run_installer(&mut cmd)?;
+
+    let mut cmd = cmd_installer();
     if let Some(image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
     }
