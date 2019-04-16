@@ -83,6 +83,10 @@ struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
 
+    #[structopt(short = "V", long = "instversion")]
+    /// Use a versioned installer binary
+    installer_version: Option<String>,
+
     #[structopt(short = "p", raw(possible_values = "&Platform::variants()", case_insensitive = "true"))]
     platform: Option<Platform>,
 
@@ -131,14 +135,13 @@ enum Opt {
     },
 }
 
-fn cmd_installer() -> std::process::Command {
-    let localbin : &std::path::Path = "bin/openshift-install".as_ref();
-    let cmd = if localbin.exists() {
-        localbin
+fn cmd_installer(version: Option<&str>) -> std::process::Command {
+    let path = if let Some(version) = version {
+        Cow::Owned(format!("openshift-install-{}", version))
     } else {
-        "openshift-install".as_ref()
+        Cow::Borrowed("openshift-install")
     };
-    let mut cmd = std::process::Command::new(cmd);
+    let mut cmd = std::process::Command::new(path.as_ref());
     // Override the libvirt defaults
     // TODO(walters) compute these from what's available on the host
     // https://github.com/openshift/installer/pull/785
@@ -175,7 +178,7 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
 
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
-    let mut cmd = cmd_installer();
+    let mut cmd = cmd_installer(None);
     cmd.args(&["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
@@ -287,11 +290,11 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     serde_yaml::to_writer(&mut w, &config)?;
     w.flush()?;
 
-    let mut cmd = cmd_installer();
+    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|x|x.as_str()));
     cmd.arg("version");
     run_installer(&mut cmd)?;
 
-    let mut cmd = cmd_installer();
+    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|x|x.as_str()));
     if let Some(image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
     }
@@ -317,7 +320,8 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 fn destroy(name: &str, force: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
 
-    let mut cmd = cmd_installer();
+    // FIXME: Use versioned installer
+    let mut cmd = cmd_installer(None);
     cmd.args(&["destroy", "cluster", "--dir"]);
     cmd.arg(&*clusterdir);
     println!("Executing `openshift-install destroy cluster`");
