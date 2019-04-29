@@ -62,7 +62,7 @@ struct InstallConfig {
 }
 
 arg_enum! {
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     enum Platform {
         Libvirt,
         AWS,
@@ -78,7 +78,7 @@ impl InstallConfigPlatform {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Serialize, Deserialize)]
 struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
@@ -286,6 +286,10 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     });
 
     fs::create_dir(&clusterdir)?;
+    let mut w = io::BufWriter::new(fs::File::create(clusterdir.join("xokdinst.yaml"))?);
+    serde_yaml::to_writer(&mut w, &o)?;
+    w.flush()?;
+
     let mut w = io::BufWriter::new(fs::File::create(clusterdir.join("install-config.yaml"))?);
     serde_yaml::to_writer(&mut w, &config)?;
     w.flush()?;
@@ -320,8 +324,20 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 fn destroy(name: &str, force: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
 
-    // FIXME: Use versioned installer
-    let mut cmd = cmd_installer(None);
+    let launch_opts_path = clusterdir.join("xokdinst.yaml");
+    let launch_opts : Option<LaunchOpts> = if launch_opts_path.exists() {
+        let mut r = io::BufReader::new(fs::File::open(launch_opts_path)?);
+        Some(serde_yaml::from_reader(&mut r)?)
+    } else {
+        eprintln!("Warning: clusterdir {} missing launch opts file xokdinst.yaml", name);
+        None
+    };
+
+    let mut cmd = if let Some(ref launch_opts) = launch_opts {
+        cmd_installer(launch_opts.installer_version.as_ref().map(|s|s.as_str()))
+    } else {
+        cmd_installer(None)
+    };
     cmd.args(&["destroy", "cluster", "--dir"]);
     cmd.arg(&*clusterdir);
     println!("Executing `openshift-install destroy cluster`");
