@@ -10,6 +10,7 @@ use directories;
 use failure::{Fallible, bail, format_err};
 use lazy_static::lazy_static;
 use serde_derive::{Serialize, Deserialize};
+use tabwriter::TabWriter;
 
 lazy_static! {
     static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
@@ -217,6 +218,20 @@ fn get_configs() -> Fallible<Vec<String>> {
     Ok(r)
 }
 
+fn get_launch_opts<P>(clusterdir: P) -> Fallible<Option<LaunchOpts>>
+    where P: AsRef<std::path::Path>
+{
+    let clusterdir = clusterdir.as_ref();
+    let launch_opts_path = clusterdir.join("xokdinst.yaml");
+    let launch_opts : Option<LaunchOpts> = if launch_opts_path.exists() {
+        let mut r = io::BufReader::new(fs::File::open(launch_opts_path)?);
+        Some(serde_yaml::from_reader(&mut r)?)
+    } else {
+        None
+    };
+    Ok(launch_opts)
+}
+
 /// Get all cluster names
 fn get_clusters() -> Fallible<Vec<String>> {
     let mut r = Vec::new();
@@ -231,6 +246,28 @@ fn get_clusters() -> Fallible<Vec<String>> {
         }
     }
     Ok(r)
+}
+
+fn print_clusters() -> Fallible<()> {
+    let clusters = get_clusters()?;
+    if clusters.len() == 0 {
+        println!("No clusters.");
+    } else {
+        let mut tw = TabWriter::new(std::io::stdout());
+        tw.write("NAME\tPLATFORM\n".as_bytes())?;
+        for v in clusters.iter() {
+            let clusterdir = APPDIRS.config_dir().join(v.as_str());
+            let launch_opts = get_launch_opts(&clusterdir)?;
+            let platform = if let Some(ref launch_opts) = launch_opts {
+                launch_opts.platform.as_ref().map(|o| Cow::Owned(o.to_string())).unwrap_or(Cow::Borrowed("<unknown>"))
+            } else {
+                Cow::Borrowed("<unknown>")
+            };
+            tw.write(format!("{}\t{}\n", v, platform).as_bytes())?;
+        }
+        tw.flush()?;
+    }
+    Ok(())
 }
 
 fn print_list(header: &str, l: &[String]) {
@@ -320,19 +357,11 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 /// Destroy a cluster
 fn destroy(name: &str, force: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
-
-    let launch_opts_path = clusterdir.join("xokdinst.yaml");
-    let launch_opts : Option<LaunchOpts> = if launch_opts_path.exists() {
-        let mut r = io::BufReader::new(fs::File::open(launch_opts_path)?);
-        Some(serde_yaml::from_reader(&mut r)?)
-    } else {
-        eprintln!("Warning: clusterdir {} missing launch opts file xokdinst.yaml", name);
-        None
-    };
-
+    let launch_opts = get_launch_opts(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
         cmd_installer(launch_opts.installer_version.as_ref().map(|s|s.as_str()))
     } else {
+        eprintln!("Warning: clusterdir {} missing launch opts file xokdinst.yaml", name);
         cmd_installer(None)
     };
     cmd.args(&["destroy", "cluster", "--dir"]);
@@ -362,8 +391,7 @@ fn main() -> Fallible<()> {
             print_list("configs", &configs.as_slice());
         },
         Opt::List => {
-            let clusters = get_clusters()?;
-            print_list("clusters", &clusters.as_slice());
+            print_clusters()?;
         },
         Opt::Launch(o) => {
             launch(o)?;
