@@ -3,16 +3,13 @@ use std::io::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use structopt::StructOpt;
+// https://github.com/clap-rs/clap/pull/1397
 #[macro_use]
 extern crate clap;
 use directories;
-#[macro_use]
-extern crate failure;
-use failure::Fallible;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate serde_derive;
+use failure::{Fallible, bail, format_err};
+use lazy_static::lazy_static;
+use serde_derive::{Serialize, Deserialize};
 
 lazy_static! {
     static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
