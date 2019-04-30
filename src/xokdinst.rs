@@ -16,24 +16,27 @@ lazy_static! {
     static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
 }
 
+static LAUNCHED_CONFIG_PATH : &str = "xokdinst-launched-config.yaml";
+static KUBECONFIG_PATH : &str = "auth/kubeconfig";
+
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 enum InstallConfigPlatform {
     Libvirt(SerdeYamlMap),
     AWS(SerdeYamlMap),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[allow(dead_code)]
 struct InstallConfigMachines {
     name: String,
     replicas: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[allow(dead_code)]
 struct InstallConfigMetadata {
     name: String,
@@ -42,7 +45,7 @@ struct InstallConfigMetadata {
     extra: Option<SerdeYamlMap>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct InstallConfig {
@@ -57,6 +60,13 @@ struct InstallConfig {
 
     #[serde(flatten)]
     extra: SerdeYamlMap
+}
+
+/// State used to launch a cluster
+#[derive(Serialize, Deserialize)]
+struct LaunchedConfig {
+    config: InstallConfig,
+    installer_version: Option<String>,
 }
 
 arg_enum! {
@@ -76,7 +86,7 @@ impl InstallConfigPlatform {
     }
 }
 
-#[derive(Debug, StructOpt, Serialize, Deserialize)]
+#[derive(Debug, StructOpt)]
 struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
@@ -218,18 +228,18 @@ fn get_configs() -> Fallible<Vec<String>> {
     Ok(r)
 }
 
-fn get_launch_opts<P>(clusterdir: P) -> Fallible<Option<LaunchOpts>>
+fn get_launched_config<P>(clusterdir: P) -> Fallible<Option<LaunchedConfig>>
     where P: AsRef<std::path::Path>
 {
     let clusterdir = clusterdir.as_ref();
-    let launch_opts_path = clusterdir.join("xokdinst.yaml");
-    let launch_opts : Option<LaunchOpts> = if launch_opts_path.exists() {
-        let mut r = io::BufReader::new(fs::File::open(launch_opts_path)?);
+    let path = clusterdir.join(LAUNCHED_CONFIG_PATH);
+    let config : Option<LaunchedConfig> = if path.exists() {
+        let mut r = io::BufReader::new(fs::File::open(path)?);
         Some(serde_yaml::from_reader(&mut r)?)
     } else {
         None
     };
-    Ok(launch_opts)
+    Ok(config)
 }
 
 /// Get all cluster names
@@ -254,16 +264,21 @@ fn print_clusters() -> Fallible<()> {
         println!("No clusters.");
     } else {
         let mut tw = TabWriter::new(std::io::stdout());
-        tw.write("NAME\tPLATFORM\n".as_bytes())?;
+        tw.write("NAME\tPLATFORM\tSTATUS\n".as_bytes())?;
         for v in clusters.iter() {
             let clusterdir = APPDIRS.config_dir().join(v.as_str());
-            let launch_opts = get_launch_opts(&clusterdir)?;
-            let platform = if let Some(ref launch_opts) = launch_opts {
-                launch_opts.platform.as_ref().map(|o| Cow::Owned(o.to_string())).unwrap_or(Cow::Borrowed("<unknown>"))
+            let config = get_launched_config(&clusterdir)?;
+            let platform = if let Some(ref config) = config {
+                Cow::Owned(config.config.platform.to_platform().to_string())
             } else {
                 Cow::Borrowed("<unknown>")
             };
-            tw.write(format!("{}\t{}\n", v, platform).as_bytes())?;
+            let launched = if clusterdir.join(KUBECONFIG_PATH).exists() {
+                "launched"
+            } else {
+                "install-failed"
+            };
+            tw.write(format!("{}\t{}\t{}\n", v, platform, launched).as_bytes())?;
         }
         tw.flush()?;
     }
@@ -320,8 +335,12 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     });
 
     fs::create_dir(&clusterdir)?;
-    let mut w = io::BufWriter::new(fs::File::create(clusterdir.join("xokdinst.yaml"))?);
-    serde_yaml::to_writer(&mut w, &o)?;
+    let mut w = io::BufWriter::new(fs::File::create(clusterdir.join(LAUNCHED_CONFIG_PATH))?);
+    let launched_config = LaunchedConfig {
+        config: config.clone(),
+        installer_version: o.installer_version.clone(),
+    };
+    serde_yaml::to_writer(&mut w, &launched_config)?;
     w.flush()?;
 
     let mut w = io::BufWriter::new(fs::File::create(clusterdir.join("install-config.yaml"))?);
@@ -357,11 +376,11 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 /// Destroy a cluster
 fn destroy(name: &str, force: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
-    let launch_opts = get_launch_opts(&clusterdir)?;
+    let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
         cmd_installer(launch_opts.installer_version.as_ref().map(|s|s.as_str()))
     } else {
-        eprintln!("Warning: clusterdir {} missing launch opts file xokdinst.yaml", name);
+        eprintln!("Warning: clusterdir {} missing launch opts file {}", name, LAUNCHED_CONFIG_PATH);
         cmd_installer(None)
     };
     cmd.args(&["destroy", "cluster", "--dir"]);
@@ -401,7 +420,7 @@ fn main() -> Fallible<()> {
         },
         Opt::Kubeconfig { name } => {
             let clusterdir = get_clusterdir(&name)?;
-            println!("{}", clusterdir.join("auth/kubeconfig").to_str().unwrap());
+            println!("{}", clusterdir.join(KUBECONFIG_PATH).to_str().unwrap());
         },
     }
 
