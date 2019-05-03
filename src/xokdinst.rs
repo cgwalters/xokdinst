@@ -17,7 +17,9 @@ lazy_static! {
 }
 
 static LAUNCHED_CONFIG_PATH : &str = "xokdinst-launched-config.yaml";
+static FAILED_STAMP_PATH : &str = "xokdinst-failed";
 static KUBECONFIG_PATH : &str = "auth/kubeconfig";
+static METADATA_PATH : &str = "metadata.json";
 
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
@@ -66,7 +68,10 @@ struct InstallConfig {
 #[derive(Serialize, Deserialize)]
 struct LaunchedConfig {
     config: InstallConfig,
+    // Subset of LaunchOpts
     installer_version: Option<String>,
+    release_image: Option<String>,
+    boot_image: Option<String>,
 }
 
 arg_enum! {
@@ -105,6 +110,10 @@ struct LaunchOpts {
     /// Override the release image (for development/testing)
     #[structopt(short = "I", long = "release-image")]
     release_image: Option<String>,
+
+    /// Override the RHCOS bootimage image (for development/testing)
+    #[structopt(short = "O", long = "boot-image")]
+    boot_image: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -273,12 +282,16 @@ fn print_clusters() -> Fallible<()> {
             } else {
                 Cow::Borrowed("<unknown>")
             };
-            let launched = if clusterdir.join(KUBECONFIG_PATH).exists() {
+            let failed = clusterdir.join(FAILED_STAMP_PATH).exists();
+            let has_kubeconfig = clusterdir.join(KUBECONFIG_PATH).exists();
+            let state = if failed {
+                "install-failed"
+            } else if has_kubeconfig {
                 "launched"
             } else {
-                "install-failed"
+                "unknown"
             };
-            tw.write(format!("{}\t{}\t{}\n", v, platform, launched).as_bytes())?;
+            tw.write(format!("{}\t{}\t{}\n", v, platform, state).as_bytes())?;
         }
         tw.flush()?;
     }
@@ -339,6 +352,8 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     let launched_config = LaunchedConfig {
         config: config.clone(),
         installer_version: o.installer_version.clone(),
+        release_image: o.release_image.clone(),
+        boot_image: o.boot_image.clone(),
     };
     serde_yaml::to_writer(&mut w, &launched_config)?;
     w.flush()?;
@@ -355,12 +370,31 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     if let Some(image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
     }
+    if let Some(image) = o.boot_image {
+        cmd.env("OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE", image);
+    }
     cmd.args(&["create", "cluster", "--dir"]);
     cmd.arg(&clusterdir);
     println!("Executing `openshift-install create cluster`");
-    run_installer(&mut cmd)?;
-
-    Ok(())
+    match run_installer(&mut cmd) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            match (|| -> Fallible<()> {
+                let p = clusterdir.join(FAILED_STAMP_PATH);
+                let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
+                let e = e.to_string();
+                f.write(e.as_bytes())?;
+                f.flush()?;
+                Ok(())
+            })() {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("Writing {}: {}", FAILED_STAMP_PATH, e);
+                }
+            };
+            Err(e)
+        }
+    }
 }
 
 /// Ensure base configdir, and get the path to a cluster
@@ -383,16 +417,24 @@ fn destroy(name: &str, force: bool) -> Fallible<()> {
         eprintln!("Warning: clusterdir {} missing launch opts file {}", name, LAUNCHED_CONFIG_PATH);
         cmd_installer(None)
     };
-    cmd.args(&["destroy", "cluster", "--dir"]);
-    cmd.arg(&*clusterdir);
-    println!("Executing `openshift-install destroy cluster`");
-    let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
-    if !status.success() {
-        if !force {
-            bail!("openshift-install failed")
-        } else {
-            eprintln!("Warning: destroy cluster failed, continuing anyways")
+    let has_metadata = clusterdir.join(METADATA_PATH).exists();
+    let failed = clusterdir.join(FAILED_STAMP_PATH).exists();
+    if has_metadata {
+        cmd.args(&["destroy", "cluster", "--dir"]);
+        cmd.arg(&*clusterdir);
+        println!("Executing `openshift-install destroy cluster`");
+        let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
+        if !status.success() {
+            if !force {
+                bail!("openshift-install failed")
+            } else {
+                eprintln!("Warning: destroy cluster failed, continuing anyways")
+            }
         }
+    } else if failed {
+        println!("Cluster {} failed install, just removing directory", name);
+    } else {
+        eprintln!("Cluster {} is missing {} but also does not have a failure stamp {}; continuing anyways", name, METADATA_PATH, FAILED_STAMP_PATH);
     }
 
     fs::remove_dir_all(clusterdir)?;
