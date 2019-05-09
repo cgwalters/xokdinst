@@ -101,6 +101,10 @@ struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
 
+    #[structopt(short = "D")]
+    /// Delete an existing cluster, if one exists
+    destroy: bool,
+
     #[structopt(short = "V", long = "instversion")]
     /// Use a versioned installer binary
     installer_version: Option<String>,
@@ -318,7 +322,10 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     fs::create_dir_all(APPDIRS.config_dir())?;
     let clusterdir = APPDIRS.config_dir().join(&o.name);
     if clusterdir.exists() {
-        bail!("Cluster {} already exists, use destroy to remove it", o.name.as_str());
+        if !o.destroy {
+            bail!("Cluster {} already exists, use destroy to remove it", o.name.as_str());
+        }
+        destroy(&o.name, true)?;
     }
     let configs = get_configs()?;
     let config_name = if o.config.is_none() && configs.len() == 0 {
