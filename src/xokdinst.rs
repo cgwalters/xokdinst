@@ -20,6 +20,10 @@ static LAUNCHED_CONFIG_PATH : &str = "xokdinst-launched-config.yaml";
 static FAILED_STAMP_PATH : &str = "xokdinst-failed";
 static KUBECONFIG_PATH : &str = "auth/kubeconfig";
 static METADATA_PATH : &str = "metadata.json";
+/// Relative path in home to credentials used to authenticate to registries
+/// The podman stack uses a different path by default but will honor this
+/// one if it exists.
+static DOCKERCFG_PATH : &str = ".docker/config.json";
 
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
@@ -57,7 +61,8 @@ struct InstallConfig {
     control_plane: InstallConfigMachines,
     metadata: Option<InstallConfigMetadata>,
     platform: InstallConfigPlatform,
-    pull_secret: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pull_secret: Option<String>,
     ssh_key: Option<String>,
 
     #[serde(flatten)]
@@ -346,6 +351,20 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         name: o.name.to_string(),
         extra: None,
     });
+
+    // If there's no pull secret, automatically use ~/.docker/config.json
+    if config.pull_secret.is_none() {
+        let dirs = match directories::BaseDirs::new() {
+            Some(x) => x,
+            None => bail!("No HOME found"),
+        };
+        let dockercfg_path = dirs.home_dir().join(DOCKERCFG_PATH);
+        if !dockercfg_path.exists() {
+            bail!("No pull secret in install config, and no {} found", DOCKERCFG_PATH);
+        }
+        let pull_secret = std::fs::read_to_string(dockercfg_path)?;
+        config.pull_secret = Some(pull_secret);
+    }
 
     fs::create_dir(&clusterdir)?;
     let mut w = io::BufWriter::new(fs::File::create(clusterdir.join(LAUNCHED_CONFIG_PATH))?);
