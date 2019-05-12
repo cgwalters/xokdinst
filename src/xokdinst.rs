@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp;
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::{fs, io};
@@ -10,6 +11,7 @@ use anyhow::{bail, Result};
 use directories;
 use lazy_static::lazy_static;
 use serde_derive::{Deserialize, Serialize};
+use sys_info::{cpu_num, mem_info};
 use tabwriter::TabWriter;
 
 mod config;
@@ -108,6 +110,7 @@ struct LaunchedConfig {
     installer_version: Option<String>,
     release_image: Option<String>,
     boot_image: Option<String>,
+    libvirt_auto_size: bool,
 }
 
 arg_enum! {
@@ -207,6 +210,10 @@ struct GenConfigOpts {
     #[structopt(short = "V", long = "instversion")]
     /// Use a versioned installer binary
     installer_version: Option<String>,
+
+    /// Discover available cpu and memory resources for libvirt
+    #[structopt(long)]
+    libvirt_auto_size: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -215,6 +222,10 @@ struct InstallRunOpts {
     #[structopt(short = "V", long = "instversion")]
     /// Use a versioned installer binary
     installer_version: Option<String>,
+
+    /// Discover available cpu and memory resources for libvirt
+    #[structopt(long)]
+    libvirt_auto_size: bool,
 
     /// Enable debug logging from installer
     #[structopt(long)]
@@ -252,20 +263,69 @@ enum Opt {
     },
 }
 
-fn cmd_installer(version: Option<&str>) -> std::process::Command {
+/// Compute master memory: host memory - (4GB * clusterSize + 2GB for bootstrap), minimum of 4GB
+fn get_master_mem(libvirt_auto_size: bool, size: u64) -> u64 {
+    let default = 4096;
+    if !libvirt_auto_size {
+        return default;
+    }
+    match mem_info() {
+        Err(e) => {
+            eprintln!(
+                "Failed to get total host memory, falling back to {}MB: {}",
+                default, e
+            );
+            return default;
+        }
+        Ok(mem) => cmp::max(4096, (mem.avail - (4 * size + 2) * 1024 * 1024) / 1024),
+    }
+}
+
+/// Compute master cpu: host cpu - 2 * clusterSize, minimum of 2
+fn get_master_cpu(libvirt_auto_size: bool, size: u32) -> u32 {
+    let default = 2;
+    if !libvirt_auto_size {
+        return default;
+    }
+    match cpu_num() {
+        Err(e) => {
+            eprintln!(
+                "Failed to get total host cpu, falling back to {}cpu: {}",
+                default, e
+            );
+            return default;
+        }
+        Ok(cpu) => cmp::max(2, cpu - (2 * size)),
+    }
+}
+
+fn cmd_installer(
+    version: Option<&str>,
+    libvirt_auto_size: bool,
+    size: Option<&ClusterSize>,
+) -> std::process::Command {
     let path = if let Some(version) = version {
         Cow::Owned(format!("openshift-install-{}", version))
     } else {
         Cow::Borrowed("openshift-install")
     };
+    let size: u32 = match size.unwrap_or(&ClusterSize::Single) {
+        ClusterSize::Single => 1,
+        ClusterSize::Compact => 3,
+    };
     let mut cmd = std::process::Command::new(path.as_ref());
     // https://github.com/openshift/installer/pull/1890
     cmd.env("OPENSHIFT_INSTALL_INVOKER", "xokdinst");
     // Override the libvirt defaults
-    // TODO(walters) compute these from what's available on the host
     // https://github.com/openshift/installer/pull/785
-    cmd.env("TF_VAR_libvirt_master_memory", "8192")
-        .env("TF_VAR_libvirt_master_vcpu", "4");
+    cmd.env(
+        "TF_VAR_libvirt_master_memory",
+        get_master_mem(libvirt_auto_size, size.into()).to_string(),
+    )
+    .env(
+        "TF_VAR_libvirt_master_vcpu",
+        get_master_cpu(libvirt_auto_size, size).to_string(),
+    );
     cmd
 }
 
@@ -302,7 +362,11 @@ fn generate_config(o: GenConfigOpts) -> Result<String> {
 
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
-    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|s| s.as_str()));
+    let mut cmd = cmd_installer(
+        o.installer_version.as_ref().map(|s| s.as_str()),
+        o.libvirt_auto_size,
+        None,
+    );
     cmd.args(&["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
@@ -449,7 +513,11 @@ fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
         .installer_version
         .as_ref()
         .map(|x| x.as_str());
-    let mut cmd = cmd_installer(installer_version);
+    let mut cmd = cmd_installer(
+        installer_version,
+        o.install_run_opts.libvirt_auto_size,
+        o.size.as_ref(),
+    );
     if let Some(ref image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
     }
@@ -482,6 +550,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             name: None,
             overwrite: false,
             installer_version: o.install_run_opts.installer_version.clone(),
+            libvirt_auto_size: false,
         })?)
     } else if let Some(platform) = o.platform.as_ref() {
         Cow::Owned(get_config_name(&None, &platform))
@@ -554,6 +623,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         installer_version: o.install_run_opts.installer_version.clone(),
         release_image: o.release_image.clone(),
         boot_image: o.boot_image.clone(),
+        libvirt_auto_size: o.install_run_opts.libvirt_auto_size,
     };
     serde_yaml::to_writer(&mut w, &launched_config)?;
     w.flush()?;
@@ -652,13 +722,17 @@ fn destroy(name: &str, force: bool, debug: bool) -> Result<()> {
     let clusterdir = get_clusterdir(name)?;
     let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
-        cmd_installer(launch_opts.installer_version.as_ref().map(|s| s.as_str()))
+        cmd_installer(
+            launch_opts.installer_version.as_ref().map(|s| s.as_str()),
+            launch_opts.libvirt_auto_size,
+            None,
+        )
     } else {
         eprintln!(
             "Warning: clusterdir {} missing launch opts file {}",
             name, LAUNCHED_CONFIG_PATH
         );
-        cmd_installer(None)
+        cmd_installer(None, false, None)
     };
     let has_metadata = clusterdir.join(METADATA_PATH).exists();
     let failed = clusterdir.join(FAILED_STAMP_PATH).exists();
