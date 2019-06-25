@@ -168,6 +168,8 @@ fn cmd_installer(version: Option<&str>) -> std::process::Command {
         Cow::Borrowed("openshift-install")
     };
     let mut cmd = std::process::Command::new(path.as_ref());
+    // https://github.com/openshift/installer/pull/1890
+    cmd.env("OPENSHIFT_INSTALL_INVOKER", "xokdinst");
     // Override the libvirt defaults
     // TODO(walters) compute these from what's available on the host
     // https://github.com/openshift/installer/pull/785
