@@ -123,6 +123,11 @@ struct LaunchOpts {
     /// Override the RHCOS bootimage image (for development/testing)
     #[structopt(short = "O", long = "boot-image")]
     boot_image: Option<String>,
+
+    /// Inject objects during installation (e.g. MachineConfig)
+    /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
+    #[structopt(long = "manifests")]
+    manifests: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -319,6 +324,18 @@ fn print_list(header: &str, l: &[String]) {
     }
 }
 
+fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
+    let installer_version = o.installer_version.as_ref().map(|x|x.as_str());
+    let mut cmd = cmd_installer(installer_version);
+    if let Some(ref image) = o.release_image {
+        cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
+    }
+    if let Some(ref image) = o.boot_image {
+        cmd.env("OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE", image);
+    }
+    cmd
+}
+
 /// 🚀
 fn launch(o: LaunchOpts) -> Fallible<()> {
     fs::create_dir_all(APPDIRS.config_dir())?;
@@ -390,17 +407,29 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     serde_yaml::to_writer(&mut w, &config)?;
     w.flush()?;
 
-    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|x|x.as_str()));
+    let mut cmd = cmd_launch_installer(&o);
     cmd.arg("version");
     run_installer(&mut cmd)?;
 
-    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|x|x.as_str()));
-    if let Some(image) = o.release_image {
-        cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
+
+    if let Some(ref manifests) = o.manifests {
+        // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
+        let mut cmd = cmd_launch_installer(&o);
+        cmd.args(&["create", "manifests", "--dir"]);
+        cmd.arg(&clusterdir);
+        println!("Copying custom manifests: {}", manifests);
+        let openshiftdir = clusterdir.join("openshift");
+        let mut copy = std::process::Command::new("cp");
+        copy.args(&["-rp", "--reflink=auto"])
+            .arg(manifests)
+            .arg(&openshiftdir);
+        if !copy.status()?.success() {
+            bail!("Failed to copy manifests")
+        }
+        run_installer(&mut cmd)?;
     }
-    if let Some(image) = o.boot_image {
-        cmd.env("OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE", image);
-    }
+
+    let mut cmd = cmd_launch_installer(&o);
     cmd.args(&["create", "cluster", "--dir"]);
     cmd.arg(&clusterdir);
     println!("Executing `openshift-install create cluster`");
