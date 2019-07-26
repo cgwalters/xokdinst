@@ -33,6 +33,7 @@ type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
 enum InstallConfigPlatform {
     Libvirt(SerdeYamlMap),
     AWS(SerdeYamlMap),
+    GCP(SerdeYamlMap),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -84,6 +85,7 @@ arg_enum! {
     enum Platform {
         Libvirt,
         AWS,
+        GCP,
     }
 }
 
@@ -92,6 +94,7 @@ impl InstallConfigPlatform {
         match self {
             InstallConfigPlatform::Libvirt(_) => Platform::Libvirt,
             InstallConfigPlatform::AWS(_) => Platform::AWS,
+            InstallConfigPlatform::GCP(_) => Platform::GCP,
         }
     }
 }
