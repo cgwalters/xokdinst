@@ -100,6 +100,7 @@ impl InstallConfigPlatform {
 }
 
 #[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
 struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
@@ -131,6 +132,9 @@ struct LaunchOpts {
     /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
     #[structopt(long = "manifests")]
     manifests: Option<String>,
+
+    #[structopt(flatten)]
+    install_run_opts: InstallRunOpts,
 }
 
 #[derive(Debug, StructOpt)]
@@ -138,7 +142,16 @@ struct GenConfigOpts {
     /// Name for this configuration; if not specified, will be named config-<platform>.yaml
     name: Option<String>,
     /// Overwrite an existing default configuration
+    #[structopt(long)]
     overwrite: bool,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+struct InstallRunOpts {
+    /// Enable debug logging from installer
+    #[structopt(long)]
+    log_debug: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -165,7 +178,10 @@ enum Opt {
 
         /// Ignore failure to delete cluster, remove directory anyways
         #[structopt(short = "f", long = "force")]
-        force: bool
+        force: bool,
+
+        #[structopt(flatten)]
+        install_run_opts: InstallRunOpts,
     },
 }
 
@@ -347,7 +363,7 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         if !o.destroy {
             bail!("Cluster {} already exists, use destroy to remove it", o.name.as_str());
         }
-        destroy(&o.name, true)?;
+        destroy(&o.name, true, o.install_run_opts.log_debug)?;
     }
     let configs = get_configs()?;
     let config_name = if o.config.is_none() && configs.len() == 0 {
@@ -435,6 +451,9 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     let mut cmd = cmd_launch_installer(&o);
     cmd.args(&["create", "cluster", "--dir"]);
     cmd.arg(&clusterdir);
+    if o.install_run_opts.log_debug {
+        cmd.arg(format!("--log-level=debug"));
+    }
     println!("Executing `openshift-install create cluster`");
     match run_installer(&mut cmd) {
         Ok(_) => Ok(()),
@@ -468,7 +487,7 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 }
 
 /// Destroy a cluster
-fn destroy(name: &str, force: bool) -> Fallible<()> {
+fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
     let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
@@ -481,6 +500,9 @@ fn destroy(name: &str, force: bool) -> Fallible<()> {
     let failed = clusterdir.join(FAILED_STAMP_PATH).exists();
     if has_metadata {
         cmd.args(&["destroy", "cluster", "--dir"]);
+        if debug {
+            cmd.arg(format!("--log-level=debug"));
+        }
         cmd.arg(&*clusterdir);
         println!("Executing `openshift-install destroy cluster`");
         let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
@@ -517,8 +539,8 @@ fn main() -> Fallible<()> {
         Opt::Launch(o) => {
             launch(o)?;
         },
-        Opt::Destroy { name, force } => {
-            destroy(&name, force)?;
+        Opt::Destroy { name, force, install_run_opts } => {
+            destroy(&name, force, install_run_opts.log_debug)?;
         },
         Opt::Kubeconfig { name } => {
             let clusterdir = get_clusterdir(&name)?;
