@@ -43,6 +43,19 @@ We're always using the `--dir` option of the upstream installer and naming that
 directory after the cluster name. This makes it more convenient to manage
 multiple clusters.
 
+Auto-injection of pull secrets
+---
+
+If you omit the `pullSecret` from your install-config, `xokdinst` will [automatically inject `~/.docker/config.json`](https://github.com/cgwalters/xokdinst/commit/8c2308d4bf0b02cd38f20323d551d4c5bcc0b40f).
+
+Nicer flow for injecting manifests
+---
+
+It's [easier to inject manifests](https://github.com/cgwalters/xokdinst/commit/0bef3d726af5fa76fbc19f35735757494808ee43).
+
+Platform configuration inheritance
+---
+
 `xokdinst` also has the concept of a "default config" for a given platform.
 And if you only have used one platform, it becomes the default config.
 When you run `launch` the first time, we introspect the platform chosen and
@@ -80,7 +93,7 @@ $ xokdinst launch -p libvirt mycluster3
 Why not add this to the installer upstream?
 ---
 
-It'd be a notable UX change.  We should consider it of course.
+It'd be a notable UX change; I'd like to do so of course.
 
 Why is this implemented in Rust
 ---
