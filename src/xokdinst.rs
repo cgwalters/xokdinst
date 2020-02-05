@@ -1,29 +1,30 @@
-use std::{fs, io};
-use std::io::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::prelude::*;
+use std::{fs, io};
 use structopt::StructOpt;
 // https://github.com/clap-rs/clap/pull/1397
 #[macro_use]
 extern crate clap;
 use directories;
-use failure::{Fallible, bail, format_err};
+use failure::{bail, format_err, Fallible};
 use lazy_static::lazy_static;
-use serde_derive::{Serialize, Deserialize};
+use serde_derive::{Deserialize, Serialize};
 use tabwriter::TabWriter;
 
 lazy_static! {
-    static ref APPDIRS : directories::ProjectDirs = directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
+    static ref APPDIRS: directories::ProjectDirs =
+        directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
 }
 
-static LAUNCHED_CONFIG_PATH : &str = "xokdinst-launched-config.yaml";
-static FAILED_STAMP_PATH : &str = "xokdinst-failed";
-static KUBECONFIG_PATH : &str = "auth/kubeconfig";
-static METADATA_PATH : &str = "metadata.json";
+static LAUNCHED_CONFIG_PATH: &str = "xokdinst-launched-config.yaml";
+static FAILED_STAMP_PATH: &str = "xokdinst-failed";
+static KUBECONFIG_PATH: &str = "auth/kubeconfig";
+static METADATA_PATH: &str = "metadata.json";
 /// Relative path in home to credentials used to authenticate to registries
 /// The podman stack uses a different path by default but will honor this
 /// one if it exists.
-static DOCKERCFG_PATH : &str = ".docker/config.json";
+static DOCKERCFG_PATH: &str = ".docker/config.json";
 
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
@@ -67,7 +68,7 @@ struct InstallConfig {
     ssh_key: Option<String>,
 
     #[serde(flatten)]
-    extra: SerdeYamlMap
+    extra: SerdeYamlMap,
 }
 
 /// State used to launch a cluster
@@ -210,7 +211,9 @@ fn cmd_installer(version: Option<&str>) -> std::process::Command {
 }
 
 fn run_installer(cmd: &mut std::process::Command) -> Fallible<()> {
-    let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
+    let status = cmd
+        .status()
+        .map_err(|e| format_err!("Executing openshift-install").context(e))?;
     if !status.success() {
         bail!("openshift-install failed")
     }
@@ -231,7 +234,10 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
     if let Some(name) = o.name.as_ref() {
         let path = APPDIRS.config_dir().join(&name);
         if !o.overwrite && path.exists() {
-            bail!("Configuration '{}' already exists and overwrite not specified", name);
+            bail!(
+                "Configuration '{}' already exists and overwrite not specified",
+                name
+            );
         }
     }
 
@@ -243,12 +249,16 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
     run_installer(&mut cmd)?;
 
     let tmp_config_path = tmpd.path().join("install-config.yaml");
-    let mut parsed_config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(tmp_config_path)?))?;
+    let mut parsed_config: InstallConfig =
+        serde_yaml::from_reader(io::BufReader::new(fs::File::open(tmp_config_path)?))?;
     let platform = parsed_config.platform.to_platform();
     let name = get_config_name(&o.name, &platform);
     let path = APPDIRS.config_dir().join(&name);
     if !o.overwrite && path.exists() {
-        bail!("Configuration '{}' already exists and overwrite not specified", name);
+        bail!(
+            "Configuration '{}' already exists and overwrite not specified",
+            name
+        );
     }
 
     // Remove the metadata/name value, we want this one to be a template
@@ -280,11 +290,12 @@ fn get_configs() -> Fallible<Vec<String>> {
 }
 
 fn get_launched_config<P>(clusterdir: P) -> Fallible<Option<LaunchedConfig>>
-    where P: AsRef<std::path::Path>
+where
+    P: AsRef<std::path::Path>,
 {
     let clusterdir = clusterdir.as_ref();
     let path = clusterdir.join(LAUNCHED_CONFIG_PATH);
-    let config : Option<LaunchedConfig> = if path.exists() {
+    let config: Option<LaunchedConfig> = if path.exists() {
         let mut r = io::BufReader::new(fs::File::open(path)?);
         Some(serde_yaml::from_reader(&mut r)?)
     } else {
@@ -351,7 +362,7 @@ fn print_list(header: &str, l: &[String]) {
 }
 
 fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
-    let installer_version = o.installer_version.as_ref().map(|x|x.as_str());
+    let installer_version = o.installer_version.as_ref().map(|x| x.as_str());
     let mut cmd = cmd_installer(installer_version);
     if let Some(ref image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
@@ -371,7 +382,10 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     let clusterdir = APPDIRS.config_dir().join(&o.name);
     if clusterdir.exists() {
         if !o.destroy {
-            bail!("Cluster {} already exists, use destroy to remove it", o.name.as_str());
+            bail!(
+                "Cluster {} already exists, use destroy to remove it",
+                o.name.as_str()
+            );
         }
         destroy(&o.name, true, o.install_run_opts.log_debug)?;
     }
@@ -394,14 +408,18 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         }
     };
     let full_name = Cow::Owned(format!("config-{}.yaml", config_name));
-    let config_path : Option<_> = [&config_name, &full_name]
-        .iter().map(|c| APPDIRS.config_dir().join(c.as_str())).filter(|c| c.exists()).next();
+    let config_path: Option<_> = [&config_name, &full_name]
+        .iter()
+        .map(|c| APPDIRS.config_dir().join(c.as_str()))
+        .filter(|c| c.exists())
+        .next();
     let config_path = match config_path {
         Some(x) => x,
         None => bail!("No such configuration: {}", config_name),
     };
 
-    let mut config : InstallConfig = serde_yaml::from_reader(io::BufReader::new(fs::File::open(config_path)?))?;
+    let mut config: InstallConfig =
+        serde_yaml::from_reader(io::BufReader::new(fs::File::open(config_path)?))?;
     config.metadata = Some(InstallConfigMetadata {
         name: o.name.to_string(),
         extra: None,
@@ -415,7 +433,10 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         };
         let dockercfg_path = dirs.home_dir().join(DOCKERCFG_PATH);
         if !dockercfg_path.exists() {
-            bail!("No pull secret in install config, and no {} found", DOCKERCFG_PATH);
+            bail!(
+                "No pull secret in install config, and no {} found",
+                DOCKERCFG_PATH
+            );
         }
         let pull_secret = std::fs::read_to_string(dockercfg_path)?;
         config.pull_secret = Some(pull_secret);
@@ -439,7 +460,6 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     let mut cmd = cmd_launch_installer(&o);
     cmd.arg("version");
     run_installer(&mut cmd)?;
-
 
     if let Some(ref manifests) = o.manifests {
         // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
@@ -476,7 +496,7 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
                 f.flush()?;
                 Ok(())
             })() {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Writing {}: {}", FAILED_STAMP_PATH, e);
                 }
@@ -501,9 +521,12 @@ fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
     let clusterdir = get_clusterdir(name)?;
     let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
-        cmd_installer(launch_opts.installer_version.as_ref().map(|s|s.as_str()))
+        cmd_installer(launch_opts.installer_version.as_ref().map(|s| s.as_str()))
     } else {
-        eprintln!("Warning: clusterdir {} missing launch opts file {}", name, LAUNCHED_CONFIG_PATH);
+        eprintln!(
+            "Warning: clusterdir {} missing launch opts file {}",
+            name, LAUNCHED_CONFIG_PATH
+        );
         cmd_installer(None)
     };
     let has_metadata = clusterdir.join(METADATA_PATH).exists();
@@ -515,7 +538,9 @@ fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
         }
         cmd.arg(&*clusterdir);
         println!("Executing `openshift-install destroy cluster`");
-        let status = cmd.status().map_err(|e| format_err!("Executing openshift-install").context(e))?;
+        let status = cmd
+            .status()
+            .map_err(|e| format_err!("Executing openshift-install").context(e))?;
         if !status.success() {
             if !force {
                 bail!("openshift-install failed")
@@ -538,24 +563,28 @@ fn main() -> Fallible<()> {
     match Opt::from_args() {
         Opt::GenConfig(o) => {
             generate_config(o)?;
-        },
+        }
         Opt::ListConfigs => {
             let configs = get_configs()?;
             print_list("configs", &configs.as_slice());
-        },
+        }
         Opt::List => {
             print_clusters()?;
-        },
+        }
         Opt::Launch(o) => {
             launch(o)?;
-        },
-        Opt::Destroy { name, force, install_run_opts } => {
+        }
+        Opt::Destroy {
+            name,
+            force,
+            install_run_opts,
+        } => {
             destroy(&name, force, install_run_opts.log_debug)?;
-        },
+        }
         Opt::Kubeconfig { name } => {
             let clusterdir = get_clusterdir(&name)?;
             println!("{}", clusterdir.join(KUBECONFIG_PATH).to_str().unwrap());
-        },
+        }
     }
 
     Ok(())
