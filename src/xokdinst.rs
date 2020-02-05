@@ -113,12 +113,19 @@ struct LaunchOpts {
     /// Use a versioned installer binary
     installer_version: Option<String>,
 
-    #[structopt(short = "p", raw(possible_values = "&Platform::variants()", case_insensitive = "true"))]
+    #[structopt(
+        short = "p",
+        raw(possible_values = "&Platform::variants()", case_insensitive = "true")
+    )]
     platform: Option<Platform>,
 
     #[structopt(short = "c", long = "config")]
     /// The name of the base configuration (overrides platform)
     config: Option<String>,
+
+    /// Keep the bootstrap image (for development/testing)
+    #[structopt(short = "K", long = "keep-bootstrap")]
+    keep_bootstrap: bool,
 
     /// Override the release image (for development/testing)
     #[structopt(short = "I", long = "release-image")]
@@ -351,6 +358,9 @@ fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
     }
     if let Some(ref image) = o.boot_image {
         cmd.env("OPENSHIFT_INSTALL_OS_IMAGE_OVERRIDE", image);
+    }
+    if o.keep_bootstrap {
+        cmd.env("OPENSHIFT_INSTALL_PRESERVE_BOOTSTRAP", "true");
     }
     cmd
 }
