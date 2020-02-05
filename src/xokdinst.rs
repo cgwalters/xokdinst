@@ -164,6 +164,12 @@ struct LaunchOpts {
     #[structopt(short = "I", long = "release-image")]
     release_image: Option<String>,
 
+    /// Use latest release image from stream (for development/testing)
+    /// For example, 4.5.0-0.nightly
+    /// See openshift-release.svc.ci.openshift.org/ for more information
+    #[structopt(short = "S", long = "release-image-from-stream")]
+    release_stream: Option<String>,
+
     /// Override the RHCOS bootimage image (for development/testing)
     #[structopt(short = "O", long = "boot-image")]
     boot_image: Option<String>,
@@ -370,6 +376,29 @@ fn get_clusters() -> Result<Vec<String>> {
     Ok(r)
 }
 
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct LatestRelease {
+    name: String,
+    #[serde(rename = "pullSpec")]
+    pull_spec: String,
+    #[serde(rename = "downloadURL")]
+    download_url: String,
+}
+
+fn get_latest_release(release_stream: &str) -> Result<String> {
+    let url = url::Url::parse(
+        format!(
+            "https://openshift-release.svc.ci.openshift.org/api/v1/releasestream/{}/latest",
+            release_stream
+        )
+        .as_str(),
+    )
+    .expect("parsing url");
+    let resp: LatestRelease = reqwest::blocking::get(url)?.json()?;
+    Ok(resp.pull_spec)
+}
+
 fn print_clusters() -> Result<()> {
     let clusters = get_clusters()?;
     if clusters.len() == 0 {
@@ -431,7 +460,7 @@ fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
 }
 
 /// 🚀
-fn launch(o: LaunchOpts) -> Result<()> {
+fn launch(mut o: LaunchOpts) -> Result<()> {
     fs::create_dir_all(APPDIRS.config_dir())?;
     let clusterdir = APPDIRS.config_dir().join(&o.name);
     if clusterdir.exists() {
@@ -472,6 +501,12 @@ fn launch(o: LaunchOpts) -> Result<()> {
         Some(x) => x,
         None => bail!("No such configuration: {}", config_name),
     };
+
+    if let Some(ref stream) = o.release_stream {
+        let image = get_latest_release(stream)?;
+        println!("Using release image: {}", image);
+        o.release_image = Some(image);
+    }
 
     let mut config: InstallConfig =
         serde_yaml::from_reader(io::BufReader::new(fs::File::open(config_path)?))?;
