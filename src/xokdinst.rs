@@ -42,6 +42,9 @@ enum InstallConfigPlatform {
 struct InstallConfigMachines {
     name: String,
     replicas: u32,
+
+    #[serde(flatten)]
+    extra: Option<SerdeYamlMap>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
