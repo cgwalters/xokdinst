@@ -35,6 +35,7 @@ enum InstallConfigPlatform {
     Libvirt(SerdeYamlMap),
     AWS(SerdeYamlMap),
     GCP(SerdeYamlMap),
+    AZURE(SerdeYamlMap),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -87,6 +88,7 @@ arg_enum! {
         Libvirt,
         AWS,
         GCP,
+        AZURE,
     }
 }
 
@@ -96,6 +98,7 @@ impl InstallConfigPlatform {
             InstallConfigPlatform::Libvirt(_) => Platform::Libvirt,
             InstallConfigPlatform::AWS(_) => Platform::AWS,
             InstallConfigPlatform::GCP(_) => Platform::GCP,
+            InstallConfigPlatform::AZURE(_) => Platform::AZURE,
         }
     }
 }
