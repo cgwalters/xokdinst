@@ -17,6 +17,29 @@ lazy_static! {
         directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
 }
 
+// Stolen from https://github.com/openshift/installer/commit/e26c1989707927018631213e63528d4d0a08e793
+static SINGLE_MASTER_CONFIGS: [&'static str; 2] = [
+    r###"
+apiVersion: operator.openshift.io/v1
+kind: Etcd
+metadata:
+  name: cluster
+spec:
+  managementState: Managed
+  unsupportedConfigOverrides:
+    useUnsupportedUnsafeNonHANonProductionUnstableEtcd: true
+"###,
+    r###"
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  name: default
+  namespace: openshift-ingress-operator
+spec:
+  replicas: 1
+"###,
+];
+
 static LAUNCHED_CONFIG_PATH: &str = "xokdinst-launched-config.yaml";
 static FAILED_STAMP_PATH: &str = "xokdinst-failed";
 static KUBECONFIG_PATH: &str = "auth/kubeconfig";
@@ -143,6 +166,10 @@ struct LaunchOpts {
     /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
     #[structopt(long = "manifests")]
     manifests: Option<String>,
+
+    /// Install a single node (not production)
+    #[structopt(long)]
+    single_node: bool,
 
     #[structopt(flatten)]
     install_run_opts: InstallRunOpts,
@@ -428,6 +455,15 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         extra: None,
     });
 
+    if o.single_node {
+        config.control_plane.replicas = 1;
+        config.compute = vec![InstallConfigMachines {
+            name: "worker".to_string(),
+            replicas: 0,
+            extra: Default::default(),
+        }];
+    }
+
     // If there's no pull secret, automatically use ~/.docker/config.json
     if config.pull_secret.is_none() {
         let dirs = match directories::BaseDirs::new() {
@@ -464,19 +500,30 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     cmd.arg("version");
     run_installer(&mut cmd)?;
 
-    if let Some(ref manifests) = o.manifests {
+    {
         // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
         let mut cmd = cmd_launch_installer(&o);
         cmd.args(&["create", "manifests", "--dir"]);
         cmd.arg(&clusterdir);
-        println!("Copying custom manifests: {}", manifests);
         let openshiftdir = clusterdir.join("openshift");
-        let mut copy = std::process::Command::new("cp");
-        copy.args(&["-rp", "--reflink=auto"])
-            .arg(manifests)
-            .arg(&openshiftdir);
-        if !copy.status()?.success() {
-            bail!("Failed to copy manifests")
+        std::fs::create_dir(&openshiftdir)?;
+        if let Some(ref manifests) = o.manifests {
+            println!("Copying custom manifests: {}", manifests);
+            let mut copy = std::process::Command::new("cp");
+            copy.args(&["-rp", "--reflink=auto"])
+                .arg(manifests)
+                .arg(&openshiftdir);
+            if !copy.status()?.success() {
+                bail!("Failed to copy manifests")
+            }
+        }
+        if o.single_node {
+            for (i, manifest) in SINGLE_MASTER_CONFIGS.iter().enumerate() {
+                std::fs::write(
+                    openshiftdir.join(format!("singlemaster{}.yaml", i)),
+                    manifest,
+                )?;
+            }
         }
         run_installer(&mut cmd)?;
     }
