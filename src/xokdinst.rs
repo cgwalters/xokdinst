@@ -116,6 +116,14 @@ arg_enum! {
     }
 }
 
+arg_enum! {
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    enum ClusterSize {
+        Single, // Only install a single node
+        Compact, // 3 schedulable masters
+    }
+}
+
 impl InstallConfigPlatform {
     fn to_platform(&self) -> Platform {
         match self {
@@ -167,9 +175,15 @@ struct LaunchOpts {
     #[structopt(long = "manifests")]
     manifests: Option<String>,
 
-    /// Install a single node (not production)
-    #[structopt(long)]
-    single_node: bool,
+    /// Cluster size
+    #[structopt(
+        long,
+        raw(
+            possible_values = "&ClusterSize::variants()",
+            case_insensitive = "true"
+        )
+    )]
+    size: Option<ClusterSize>,
 
     #[structopt(flatten)]
     install_run_opts: InstallRunOpts,
@@ -455,8 +469,11 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
         extra: None,
     });
 
-    if o.single_node {
-        config.control_plane.replicas = 1;
+    if let Some(clustersize) = o.size.as_ref() {
+        config.control_plane.replicas = match clustersize {
+            ClusterSize::Single => 1,
+            ClusterSize::Compact => 3,
+        };
         config.compute = vec![InstallConfigMachines {
             name: "worker".to_string(),
             replicas: 0,
@@ -517,13 +534,16 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
                 bail!("Failed to copy manifests")
             }
         }
-        if o.single_node {
-            for (i, manifest) in SINGLE_MASTER_CONFIGS.iter().enumerate() {
-                std::fs::write(
-                    openshiftdir.join(format!("singlemaster{}.yaml", i)),
-                    manifest,
-                )?;
+        match o.size.as_ref() {
+            Some(ClusterSize::Single) => {
+                for (i, manifest) in SINGLE_MASTER_CONFIGS.iter().enumerate() {
+                    std::fs::write(
+                        openshiftdir.join(format!("singlemaster{}.yaml", i)),
+                        manifest,
+                    )?;
+                }
             }
+            _ => {}
         }
         run_installer(&mut cmd)?;
     }
