@@ -6,8 +6,8 @@ use structopt::StructOpt;
 // https://github.com/clap-rs/clap/pull/1397
 #[macro_use]
 extern crate clap;
+use anyhow::{bail, Result};
 use directories;
-use failure::{bail, format_err, Fallible};
 use lazy_static::lazy_static;
 use serde_derive::{Deserialize, Serialize};
 use tabwriter::TabWriter;
@@ -254,10 +254,10 @@ fn cmd_installer(version: Option<&str>) -> std::process::Command {
     cmd
 }
 
-fn run_installer(cmd: &mut std::process::Command) -> Fallible<()> {
+fn run_installer(cmd: &mut std::process::Command) -> Result<()> {
     let status = cmd
         .status()
-        .map_err(|e| format_err!("Executing openshift-install").context(e))?;
+        .map_err(|e| anyhow::anyhow!("Executing openshift-install").context(e))?;
     if !status.success() {
         bail!("openshift-install failed")
     }
@@ -274,7 +274,7 @@ fn get_config_name(name: &Option<String>, platform: &Platform) -> String {
 }
 
 /// Create a config-X.yaml
-fn generate_config(o: GenConfigOpts) -> Fallible<String> {
+fn generate_config(o: GenConfigOpts) -> Result<String> {
     if let Some(name) = o.name.as_ref() {
         let path = APPDIRS.config_dir().join(&name);
         if !o.overwrite && path.exists() {
@@ -320,7 +320,7 @@ fn generate_config(o: GenConfigOpts) -> Fallible<String> {
 }
 
 /// Get all configurations
-fn get_configs() -> Fallible<Vec<String>> {
+fn get_configs() -> Result<Vec<String>> {
     let mut r = Vec::new();
     for entry in fs::read_dir(APPDIRS.config_dir())? {
         let entry = entry?;
@@ -333,7 +333,7 @@ fn get_configs() -> Fallible<Vec<String>> {
     Ok(r)
 }
 
-fn get_launched_config<P>(clusterdir: P) -> Fallible<Option<LaunchedConfig>>
+fn get_launched_config<P>(clusterdir: P) -> Result<Option<LaunchedConfig>>
 where
     P: AsRef<std::path::Path>,
 {
@@ -349,7 +349,7 @@ where
 }
 
 /// Get all cluster names
-fn get_clusters() -> Fallible<Vec<String>> {
+fn get_clusters() -> Result<Vec<String>> {
     let mut r = Vec::new();
     for entry in fs::read_dir(APPDIRS.config_dir())? {
         let entry = entry?;
@@ -364,7 +364,7 @@ fn get_clusters() -> Fallible<Vec<String>> {
     Ok(r)
 }
 
-fn print_clusters() -> Fallible<()> {
+fn print_clusters() -> Result<()> {
     let clusters = get_clusters()?;
     if clusters.len() == 0 {
         println!("No clusters.");
@@ -421,7 +421,7 @@ fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
 }
 
 /// 🚀
-fn launch(o: LaunchOpts) -> Fallible<()> {
+fn launch(o: LaunchOpts) -> Result<()> {
     fs::create_dir_all(APPDIRS.config_dir())?;
     let clusterdir = APPDIRS.config_dir().join(&o.name);
     if clusterdir.exists() {
@@ -558,7 +558,7 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
     match run_installer(&mut cmd) {
         Ok(_) => Ok(()),
         Err(e) => {
-            match (|| -> Fallible<()> {
+            match (|| -> Result<()> {
                 let p = clusterdir.join(FAILED_STAMP_PATH);
                 let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
                 let e = e.to_string();
@@ -577,7 +577,7 @@ fn launch(o: LaunchOpts) -> Fallible<()> {
 }
 
 /// Ensure base configdir, and get the path to a cluster
-fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
+fn get_clusterdir(name: &str) -> Result<Box<std::path::Path>> {
     fs::create_dir_all(APPDIRS.config_dir())?;
     let clusterdir = APPDIRS.config_dir().join(name);
     if !clusterdir.exists() {
@@ -587,7 +587,7 @@ fn get_clusterdir(name: &str) -> Fallible<Box<std::path::Path>> {
 }
 
 /// Destroy a cluster
-fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
+fn destroy(name: &str, force: bool, debug: bool) -> Result<()> {
     let clusterdir = get_clusterdir(name)?;
     let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
@@ -610,7 +610,7 @@ fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
         println!("Executing `openshift-install destroy cluster`");
         let status = cmd
             .status()
-            .map_err(|e| format_err!("Executing openshift-install").context(e))?;
+            .map_err(|e| anyhow::anyhow!("Executing openshift-install").context(e))?;
         if !status.success() {
             if !force {
                 bail!("openshift-install failed")
@@ -629,7 +629,7 @@ fn destroy(name: &str, force: bool, debug: bool) -> Fallible<()> {
 }
 
 /// Primary entrypoint
-fn main() -> Fallible<()> {
+fn main() -> Result<()> {
     match Opt::from_args() {
         Opt::GenConfig(o) => {
             generate_config(o)?;
