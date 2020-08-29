@@ -144,10 +144,6 @@ struct LaunchOpts {
     /// Delete an existing cluster, if one exists
     destroy: bool,
 
-    #[structopt(short = "V", long = "instversion")]
-    /// Use a versioned installer binary
-    installer_version: Option<String>,
-
     #[structopt(
         short = "p",
         raw(possible_values = "&Platform::variants()", case_insensitive = "true")
@@ -196,11 +192,19 @@ struct GenConfigOpts {
     /// Overwrite an existing default configuration
     #[structopt(long)]
     overwrite: bool,
+
+    #[structopt(short = "V", long = "instversion")]
+    /// Use a versioned installer binary
+    installer_version: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 struct InstallRunOpts {
+    #[structopt(short = "V", long = "instversion")]
+    /// Use a versioned installer binary
+    installer_version: Option<String>,
+
     /// Enable debug logging from installer
     #[structopt(long)]
     log_debug: bool,
@@ -287,7 +291,7 @@ fn generate_config(o: GenConfigOpts) -> Result<String> {
 
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
-    let mut cmd = cmd_installer(None);
+    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|s|s.as_str()));
     cmd.args(&["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
@@ -406,7 +410,7 @@ fn print_list(header: &str, l: &[String]) {
 }
 
 fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
-    let installer_version = o.installer_version.as_ref().map(|x| x.as_str());
+    let installer_version = o.install_run_opts.installer_version.as_ref().map(|x| x.as_str());
     let mut cmd = cmd_installer(installer_version);
     if let Some(ref image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
@@ -439,6 +443,7 @@ fn launch(o: LaunchOpts) -> Result<()> {
         Cow::Owned(generate_config(GenConfigOpts {
             name: None,
             overwrite: false,
+            installer_version: o.install_run_opts.installer_version.clone(),
         })?)
     } else if let Some(platform) = o.platform.as_ref() {
         Cow::Owned(get_config_name(&None, &platform))
@@ -502,7 +507,7 @@ fn launch(o: LaunchOpts) -> Result<()> {
     let mut w = io::BufWriter::new(fs::File::create(clusterdir.join(LAUNCHED_CONFIG_PATH))?);
     let launched_config = LaunchedConfig {
         config: config.clone(),
-        installer_version: o.installer_version.clone(),
+        installer_version: o.install_run_opts.installer_version.clone(),
         release_image: o.release_image.clone(),
         boot_image: o.boot_image.clone(),
     };
