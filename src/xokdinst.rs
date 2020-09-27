@@ -293,7 +293,7 @@ fn generate_config(o: GenConfigOpts) -> Result<String> {
 
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
-    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|s|s.as_str()));
+    let mut cmd = cmd_installer(o.installer_version.as_ref().map(|s| s.as_str()));
     cmd.args(&["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
@@ -412,7 +412,11 @@ fn print_list(header: &str, l: &[String]) {
 }
 
 fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
-    let installer_version = o.install_run_opts.installer_version.as_ref().map(|x| x.as_str());
+    let installer_version = o
+        .install_run_opts
+        .installer_version
+        .as_ref()
+        .map(|x| x.as_str());
     let mut cmd = cmd_installer(installer_version);
     if let Some(ref image) = o.release_image {
         cmd.env("OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE", image);
@@ -561,7 +565,7 @@ fn launch(o: LaunchOpts) -> Result<()> {
                     let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
                     serde_json::to_writer_pretty(&mut f, &v)?;
                 }
-            },
+            }
             _ => {}
         };
         run_installer(&mut cmd)?;
