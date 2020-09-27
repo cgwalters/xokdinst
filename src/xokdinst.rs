@@ -12,6 +12,8 @@ use lazy_static::lazy_static;
 use serde_derive::{Deserialize, Serialize};
 use tabwriter::TabWriter;
 
+mod config;
+
 lazy_static! {
     static ref APPDIRS: directories::ProjectDirs =
         directories::ProjectDirs::from("org", "openshift", "xokdinst").expect("creating appdirs");
@@ -550,6 +552,18 @@ fn launch(o: LaunchOpts) -> Result<()> {
             }
             _ => {}
         }
+        match launched_config.config.platform {
+            InstallConfigPlatform::Libvirt(_) => {
+                for role in &["master", "worker"] {
+                    let c: serde_json::Value = serde_json::from_str(config::AUTOLOGIN_CONFIG)?;
+                    let v = config::machineconfig_from_ign_for_role(&c, "autologin", role);
+                    let p = openshiftdir.join(format!("autologin-{}.json", role));
+                    let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
+                    serde_json::to_writer_pretty(&mut f, &v)?;
+                }
+            },
+            _ => {}
+        };
         run_installer(&mut cmd)?;
     }
 
