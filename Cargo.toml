@@ -16,6 +16,7 @@ serde = "1.0.104"
 serde_derive = "1.0.104"
 serde_yaml = "0.8"
 serde_json = "1.0"
+sys-info = "0.5.6"
 tabwriter = "1.1.0"
 url = "2.1.1"
 
