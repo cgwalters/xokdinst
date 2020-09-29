@@ -1,5 +1,8 @@
 [package]
 name = "xokdinst"
+license = "Apache-2.0"
+description = "Wrapper for openshift-install"
+keywords = ["kubernetes", "openshift"]
 version = "0.8.0"
 authors = ["Colin Walters <walters@verbum.org>"]
 edition = "2018"
