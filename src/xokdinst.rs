@@ -638,8 +638,17 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     run_installer(&mut cmd)?;
 
     {
+        // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
+        let mut cmd = cmd_launch_installer(&o);
+        cmd.args(&["create", "manifests", "--dir"]);
+        cmd.arg(&clusterdir);
+        println!("Running create manifests");
+        run_installer(&mut cmd)?;
+
         let openshiftdir = clusterdir.join("openshift");
-        std::fs::create_dir(&openshiftdir)?;
+        if !openshiftdir.exists() {
+            std::fs::create_dir(&openshiftdir)?;
+        }
         if let Some(ref manifests) = o.manifests {
             let mut copied: Vec<String> = Vec::new();
             for f in std::fs::read_dir(manifests).context("Failed to read manifests directory")? {
@@ -689,11 +698,6 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             _ => {}
         };
 
-        // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
-        let mut cmd = cmd_launch_installer(&o);
-        cmd.args(&["create", "manifests", "--dir"]);
-        cmd.arg(&clusterdir);
-        run_installer(&mut cmd)?;
     }
 
     let mut cmd = cmd_launch_installer(&o);
