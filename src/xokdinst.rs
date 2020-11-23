@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::cmp;
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::{fs, io};
 use std::path::Path;
+use std::{fs, io};
 use structopt::StructOpt;
 // https://github.com/clap-rs/clap/pull/1397
 #[macro_use]
@@ -654,7 +654,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             for f in std::fs::read_dir(manifests).context("Failed to read manifests directory")? {
                 let f = f?;
                 if !f.file_type()?.is_file() {
-                    continue
+                    continue;
                 }
                 let name = f.file_name();
                 let name = match name.to_str() {
@@ -666,13 +666,15 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
                 copied.push(name.to_string());
             }
             if copied.is_empty() {
-                bail!("No regular files found in additional manifests directory: {}", manifests);
+                bail!(
+                    "No regular files found in additional manifests directory: {}",
+                    manifests
+                );
             }
             println!("Copied custom manifests:");
             for f in copied {
                 println!("  {}", f);
             }
-
         }
         match o.size.as_ref() {
             Some(ClusterSize::Single) => {
@@ -697,7 +699,6 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             }
             _ => {}
         };
-
     }
 
     let mut cmd = cmd_launch_installer(&o);
