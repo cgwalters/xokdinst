@@ -3,11 +3,12 @@ use std::cmp;
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::{fs, io};
+use std::path::Path;
 use structopt::StructOpt;
 // https://github.com/clap-rs/clap/pull/1397
 #[macro_use]
 extern crate clap;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use directories;
 use lazy_static::lazy_static;
 use serde_derive::{Deserialize, Serialize};
@@ -637,21 +638,32 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     run_installer(&mut cmd)?;
 
     {
-        // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
-        let mut cmd = cmd_launch_installer(&o);
-        cmd.args(&["create", "manifests", "--dir"]);
-        cmd.arg(&clusterdir);
         let openshiftdir = clusterdir.join("openshift");
         std::fs::create_dir(&openshiftdir)?;
         if let Some(ref manifests) = o.manifests {
-            println!("Copying custom manifests: {}", manifests);
-            let mut copy = std::process::Command::new("cp");
-            copy.args(&["-rp", "--reflink=auto"])
-                .arg(manifests)
-                .arg(&openshiftdir);
-            if !copy.status()?.success() {
-                bail!("Failed to copy manifests")
+            let mut copied: Vec<String> = Vec::new();
+            for f in std::fs::read_dir(manifests).context("Failed to read manifests directory")? {
+                let f = f?;
+                if !f.file_type()?.is_file() {
+                    continue
+                }
+                let name = f.file_name();
+                let name = match name.to_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let dest = Path::new(&openshiftdir).join(name);
+                std::fs::copy(&f.path(), dest).context("Failed to copy manifest")?;
+                copied.push(name.to_string());
             }
+            if copied.is_empty() {
+                bail!("No regular files found in additional manifests directory: {}", manifests);
+            }
+            println!("Copied custom manifests:");
+            for f in copied {
+                println!("  {}", f);
+            }
+
         }
         match o.size.as_ref() {
             Some(ClusterSize::Single) => {
@@ -676,6 +688,11 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             }
             _ => {}
         };
+
+        // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
+        let mut cmd = cmd_launch_installer(&o);
+        cmd.args(&["create", "manifests", "--dir"]);
+        cmd.arg(&clusterdir);
         run_installer(&mut cmd)?;
     }
 
