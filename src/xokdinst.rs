@@ -457,7 +457,7 @@ struct LatestRelease {
 fn get_latest_release(release_stream: &str) -> Result<String> {
     let url = url::Url::parse(
         format!(
-            "https://openshift-release.svc.ci.openshift.org/api/v1/releasestream/{}/latest",
+            "https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/{}/latest",
             release_stream
         )
         .as_str(),
