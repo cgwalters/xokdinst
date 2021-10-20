@@ -127,7 +127,8 @@ arg_enum! {
 arg_enum! {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     enum ClusterSize {
-        Single, // Only install a single node
+        Single, // Single Node OpenShift
+        SingleOld, // Legacy unsupported single node config
         Compact, // 3 schedulable masters
     }
 }
@@ -311,7 +312,7 @@ fn cmd_installer(
         Cow::Borrowed("openshift-install")
     };
     let size: u32 = match size.unwrap_or(&ClusterSize::Single) {
-        ClusterSize::Single => 1,
+        ClusterSize::Single | &ClusterSize::SingleOld => 1,
         ClusterSize::Compact => 3,
     };
     let mut cmd = std::process::Command::new(path.as_ref());
@@ -590,7 +591,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
 
     if let Some(clustersize) = o.size.as_ref() {
         config.control_plane.replicas = match clustersize {
-            ClusterSize::Single => 1,
+            ClusterSize::Single | ClusterSize::SingleOld => 1,
             ClusterSize::Compact => 3,
         };
         config.compute = vec![InstallConfigMachines {
@@ -677,7 +678,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             }
         }
         match o.size.as_ref() {
-            Some(ClusterSize::Single) => {
+            Some(ClusterSize::SingleOld) => {
                 for (i, manifest) in SINGLE_MASTER_CONFIGS.iter().enumerate() {
                     std::fs::write(
                         openshiftdir.join(format!("singlemaster{}.yaml", i)),
