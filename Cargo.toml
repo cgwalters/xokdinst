@@ -8,8 +8,8 @@ authors = ["Colin Walters <walters@verbum.org>"]
 edition = "2018"
 
 [dependencies]
-clap = "2.32.0"
-structopt = "0.2"
+clap = { git = "https://github.com/clap-rs/clap", features = ["derive"] }
+clap_derive = { git = "https://github.com/clap-rs/clap" }
 directories = "1.0"
 anyhow = "1.0"
 lazy_static = "1.4.0"

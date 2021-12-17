@@ -1,17 +1,14 @@
+use anyhow::{bail, Context, Result};
+use clap::StructOpt;
+use directories;
+use lazy_static::lazy_static;
+use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::path::Path;
 use std::{fs, io};
-use structopt::StructOpt;
-// https://github.com/clap-rs/clap/pull/1397
-#[macro_use]
-extern crate clap;
-use anyhow::{bail, Context, Result};
-use directories;
-use lazy_static::lazy_static;
-use serde_derive::{Deserialize, Serialize};
 use sys_info::{cpu_num, mem_info};
 use tabwriter::TabWriter;
 
@@ -114,23 +111,19 @@ struct LaunchedConfig {
     libvirt_auto_size: bool,
 }
 
-arg_enum! {
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    enum Platform {
-        Libvirt,
-        AWS,
-        GCP,
-        AZURE,
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, clap::ArgEnum)]
+enum Platform {
+    Libvirt,
+    AWS,
+    GCP,
+    AZURE,
 }
 
-arg_enum! {
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    enum ClusterSize {
-        Single, // Single Node OpenShift
-        SingleOld, // Legacy unsupported single node config
-        Compact, // 3 schedulable masters
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, clap::ArgEnum)]
+enum ClusterSize {
+    Single,    // Single Node OpenShift
+    SingleOld, // Legacy unsupported single node config
+    Compact,   // 3 schedulable masters
 }
 
 impl InstallConfigPlatform {
@@ -144,51 +137,51 @@ impl InstallConfigPlatform {
     }
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[derive(Debug, clap::StructOpt)]
+#[clap(rename_all = "kebab-case")]
 struct LaunchOpts {
     /// Name of the cluster to launch
     name: String,
 
-    #[structopt(short = "D")]
+    #[clap(short = "D")]
     /// Delete an existing cluster, if one exists
     destroy: bool,
 
-    #[structopt(
+    #[clap(
         short = "p",
         raw(possible_values = "&Platform::variants()", case_insensitive = "true")
     )]
     platform: Option<Platform>,
 
-    #[structopt(short = "c", long = "config")]
+    #[clap(short = "c", long = "config")]
     /// The name of the base configuration (overrides platform)
     config: Option<String>,
 
     /// Keep the bootstrap image (for development/testing)
-    #[structopt(short = "K", long = "keep-bootstrap")]
+    #[clap(short = "K", long = "keep-bootstrap")]
     keep_bootstrap: bool,
 
     /// Override the release image (for development/testing)
-    #[structopt(short = "I", long = "release-image")]
+    #[clap(short = "I", long = "release-image")]
     release_image: Option<String>,
 
     /// Use latest release image from stream (for development/testing)
     /// For example, 4.5.0-0.nightly
     /// See openshift-release.svc.ci.openshift.org/ for more information
-    #[structopt(short = "S", long = "release-image-from-stream")]
+    #[clap(short = "S", long = "release-image-from-stream")]
     release_stream: Option<String>,
 
     /// Override the RHCOS bootimage image (for development/testing)
-    #[structopt(short = "O", long = "boot-image")]
+    #[clap(short = "O", long = "boot-image")]
     boot_image: Option<String>,
 
     /// Inject objects during installation (e.g. MachineConfig)
     /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
-    #[structopt(long = "manifests")]
+    #[clap(long = "manifests")]
     manifests: Option<String>,
 
     /// Cluster size
-    #[structopt(
+    #[clap(
         long,
         raw(
             possible_values = "&ClusterSize::variants()",
@@ -197,46 +190,46 @@ struct LaunchOpts {
     )]
     size: Option<ClusterSize>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     install_run_opts: InstallRunOpts,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::StructOpt)]
 struct GenConfigOpts {
     /// Name for this configuration; if not specified, will be named config-<platform>.yaml
     name: Option<String>,
     /// Overwrite an existing default configuration
-    #[structopt(long)]
+    #[clap(long)]
     overwrite: bool,
 
-    #[structopt(short = "V", long = "instversion")]
+    #[clap(short = 'V', long = "instversion")]
     /// Use a versioned installer binary
     installer_version: Option<String>,
 
     /// Discover available cpu and memory resources for libvirt
-    #[structopt(long)]
+    #[clap(long)]
     libvirt_auto_size: bool,
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
 struct InstallRunOpts {
-    #[structopt(short = "V", long = "instversion")]
+    #[clap(short = 'V', long = "instversion")]
     /// Use a versioned installer binary
     installer_version: Option<String>,
 
     /// Discover available cpu and memory resources for libvirt
-    #[structopt(long)]
+    #[clap(long)]
     libvirt_auto_size: bool,
 
     /// Enable debug logging from installer
-    #[structopt(long)]
+    #[clap(long)]
     log_debug: bool,
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "xokdinst", about = "Extended OpenShift installer wrapper")]
-#[structopt(rename_all = "kebab-case")]
+#[clap(name = "xokdinst", about = "Extended OpenShift installer wrapper")]
+#[clap(rename_all = "kebab-case")]
 /// Main options struct
 enum Opt {
     /// Generate the default configuration for a given platform
@@ -257,10 +250,10 @@ enum Opt {
         name: String,
 
         /// Ignore failure to delete cluster, remove directory anyways
-        #[structopt(short = "f", long = "force")]
+        #[clap(short = 'f', long = "force")]
         force: bool,
 
-        #[structopt(flatten)]
+        #[clap(flatten)]
         install_run_opts: InstallRunOpts,
     },
 }
