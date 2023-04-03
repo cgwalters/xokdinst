@@ -5,7 +5,7 @@ description = "Wrapper for openshift-install"
 keywords = ["kubernetes", "openshift"]
 version = "0.8.1"
 authors = ["Colin Walters <walters@verbum.org>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 clap = "2.32.0"

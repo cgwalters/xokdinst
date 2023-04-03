@@ -364,11 +364,7 @@ fn generate_config(o: GenConfigOpts) -> Result<String> {
 
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
-    let mut cmd = cmd_installer(
-        o.installer_version.as_deref(),
-        o.libvirt_auto_size,
-        None,
-    );
+    let mut cmd = cmd_installer(o.installer_version.as_deref(), o.libvirt_auto_size, None);
     cmd.args(["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
@@ -474,7 +470,7 @@ fn print_clusters() -> Result<()> {
         println!("No clusters.");
     } else {
         let mut tw = TabWriter::new(std::io::stdout());
-        tw.write("NAME\tPLATFORM\tSTATUS\n".as_bytes())?;
+        tw.write_all("NAME\tPLATFORM\tSTATUS\n".as_bytes())?;
         for v in clusters.iter() {
             let clusterdir = APPDIRS.config_dir().join(v.as_str());
             let config = get_launched_config(&clusterdir)?;
@@ -492,7 +488,7 @@ fn print_clusters() -> Result<()> {
             } else {
                 "unknown"
             };
-            tw.write(format!("{}\t{}\t{}\n", v, platform, state).as_bytes())?;
+            tw.write_all(format!("{}\t{}\t{}\n", v, platform, state).as_bytes())?;
         }
         tw.flush()?;
     }
@@ -510,9 +506,7 @@ fn print_list(header: &str, l: &[String]) {
 }
 
 fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
-    let installer_version = o
-        .install_run_opts
-        .installer_version.as_deref();
+    let installer_version = o.install_run_opts.installer_version.as_deref();
     let mut cmd = cmd_installer(
         installer_version,
         o.install_run_opts.libvirt_auto_size,
@@ -564,7 +558,8 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     let full_name = Cow::Owned(format!("config-{}.yaml", config_name));
     let config_path: Option<_> = [&config_name, &full_name]
         .iter()
-        .map(|c| APPDIRS.config_dir().join(c.as_str())).find(|c| c.exists());
+        .map(|c| APPDIRS.config_dir().join(c.as_str()))
+        .find(|c| c.exists());
     let config_path = match config_path {
         Some(x) => x,
         None => bail!("No such configuration: {}", config_name),
@@ -708,10 +703,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         Err(e) => {
             match (|| -> Result<()> {
                 let p = clusterdir.join(FAILED_STAMP_PATH);
-                let mut f = std::io::BufWriter::new(std::fs::File::create(p)?);
-                let e = e.to_string();
-                f.write(e.as_bytes())?;
-                f.flush()?;
+                std::fs::write(p, e.to_string())?;
                 Ok(())
             })() {
                 Ok(_) => {}
