@@ -1,8 +1,11 @@
+use coreos_stream_metadata::Artifact;
+use openssl::hash::{Hasher, MessageDigest};
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{fs, io};
 use structopt::StructOpt;
 // https://github.com/clap-rs/clap/pull/1397
@@ -58,12 +61,15 @@ static CONTAINER_AUTH_PATH: &str = ".config/containers/auth.json";
 /// one if it exists.
 static DOCKERCFG_PATH: &str = ".docker/config.json";
 
+static BASE_SNO_CONFIG: &str = include_str!("install-config-sno-base.yaml");
+
 /// Holds extra keys from a map we didn't explicitly parse
 type SerdeYamlMap = HashMap<String, serde_yaml::Value>;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 enum InstallConfigPlatform {
+    None(SerdeYamlMap),
     Libvirt(SerdeYamlMap),
     AWS(SerdeYamlMap),
     GCP(SerdeYamlMap),
@@ -91,6 +97,12 @@ struct InstallConfigMetadata {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct BootstrapInPlace {
+    installation_disk: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct InstallConfig {
     api_version: String,
@@ -102,6 +114,7 @@ struct InstallConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pull_secret: Option<String>,
     ssh_key: Option<String>,
+    bootstrap_in_place: Option<BootstrapInPlace>,
 
     #[serde(flatten)]
     extra: SerdeYamlMap,
@@ -140,6 +153,7 @@ arg_enum! {
 impl InstallConfigPlatform {
     fn to_platform(&self) -> Platform {
         match self {
+            InstallConfigPlatform::None(_) => Platform::Libvirt,
             InstallConfigPlatform::Libvirt(_) => Platform::Libvirt,
             InstallConfigPlatform::AWS(_) => Platform::AWS,
             InstallConfigPlatform::GCP(_) => Platform::GCP,
@@ -206,6 +220,46 @@ struct LaunchOpts {
 }
 
 #[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+struct BuildISOOpts {
+    #[structopt(short = "c", long = "config")]
+    /// The name of the base configuration (overrides platform)
+    config: Option<String>,
+
+    /// Override the RHCOS ISO
+    #[structopt(long = "iso")]
+    src_iso: Option<String>,
+
+    /// Inject objects during installation (e.g. MachineConfig)
+    /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
+    #[structopt(long = "manifests")]
+    manifests: Option<String>,
+
+    /// Target disk path for installation
+    #[structopt(
+        short = "D",
+        long = "target-disk",
+        default_value = "/dev/disk/by-id/virtio-sno-target-disk"
+    )]
+    target_disk: String,
+
+    /// Path to SSH key to inject
+    #[structopt(long)]
+    ssh_key_path: Option<String>,
+
+    /// Enable auto-login on the console
+    #[structopt(long)]
+    console_autologin: bool,
+
+    /// Save output data to target directory
+    #[structopt(short = "O", long = "output")]
+    output_dir: String,
+
+    #[structopt(flatten)]
+    install_run_opts: InstallRunOpts,
+}
+
+#[derive(Debug, StructOpt)]
 struct GenConfigOpts {
     /// Name for this configuration; if not specified, will be named config-<platform>.yaml
     name: Option<String>,
@@ -251,6 +305,8 @@ enum Opt {
     List,
     /// Launch a new cluster
     Launch(LaunchOpts),
+    /// Generate and installable ISO
+    BuildISO(BuildISOOpts),
     Kubeconfig {
         /// Print the kubeconfig path for this cluster
         name: String,
@@ -528,6 +584,33 @@ fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
     cmd
 }
 
+fn get_user_pull_secret() -> Result<String> {
+    let dirs = match directories::BaseDirs::new() {
+        Some(x) => x,
+        None => bail!("No HOME found"),
+    };
+    let mut auth_path = None;
+    for path in [DOCKERCFG_PATH, CONTAINER_AUTH_PATH] {
+        let path = dirs.home_dir().join(path);
+        if path.exists() {
+            auth_path = Some(path)
+        }
+    }
+    let auth_path = auth_path.ok_or_else(|| {
+        anyhow::anyhow!("No pull secret in install config, and no per-user container auth found")
+    })?;
+    let r = std::fs::read_to_string(auth_path)?;
+    Ok(r)
+}
+
+fn require_pull_secret(config: &mut InstallConfig) -> Result<()> {
+    // If there's no pull secret, automatically use container config
+    if config.pull_secret.is_none() {
+        config.pull_secret = Some(get_user_pull_secret()?);
+    }
+    Ok(())
+}
+
 /// 🚀
 fn launch(mut o: LaunchOpts) -> Result<()> {
     fs::create_dir_all(APPDIRS.config_dir())?;
@@ -594,27 +677,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         }];
     }
 
-    // If there's no pull secret, automatically use container config
-    if config.pull_secret.is_none() {
-        let dirs = match directories::BaseDirs::new() {
-            Some(x) => x,
-            None => bail!("No HOME found"),
-        };
-        let mut auth_path = None;
-        for path in [DOCKERCFG_PATH, CONTAINER_AUTH_PATH] {
-            let path = dirs.home_dir().join(path);
-            if path.exists() {
-                auth_path = Some(path)
-            }
-        }
-        let auth_path = auth_path.ok_or_else(|| {
-            anyhow::anyhow!(
-                "No pull secret in install config, and no per-user container auth found"
-            )
-        })?;
-        let pull_secret = std::fs::read_to_string(auth_path)?;
-        config.pull_secret = Some(pull_secret);
-    }
+    require_pull_secret(&mut config)?;
 
     fs::create_dir(&clusterdir)?;
     let mut w = io::BufWriter::new(fs::File::create(clusterdir.join(LAUNCHED_CONFIG_PATH))?);
@@ -725,6 +788,173 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     }
 }
 
+fn ensure_iso(src: &Artifact) -> Result<PathBuf> {
+    let location = src.location.as_str();
+    let name = location
+        .rsplit_once('/')
+        .ok_or_else(|| anyhow::anyhow!("Invalid ISO location {location}"))?
+        .1;
+    let cachedir = APPDIRS.cache_dir();
+    if !cachedir.exists() {
+        std::fs::create_dir_all(cachedir)?;
+    }
+    let path = cachedir.join(name);
+    if path.exists() {
+        return Ok(path);
+    }
+    println!("Downloading {location}");
+    let mut tmpf = tempfile::NamedTempFile::new_in(cachedir)?;
+    {
+        let mut req = reqwest::blocking::get(location)?;
+        req.copy_to(&mut tmpf)
+            .context("Downloading and writing {location}")?;
+    }
+    tmpf.flush()?;
+    let mut hasher = Hasher::new(MessageDigest::sha256()).unwrap();
+    tmpf.seek(io::SeekFrom::Start(0))?;
+    std::io::copy(&mut tmpf.as_file(), &mut hasher)?;
+    let digest = hasher.finish()?;
+    let found_digest = hex::encode(&digest);
+    let expected_digest = src.sha256.as_str();
+    if found_digest != expected_digest {
+        anyhow::bail!("Failed to verify {location}; expected digest={expected_digest} found digest={found_digest}");
+    }
+    let tmppath = tmpf.into_temp_path();
+    std::fs::rename(tmppath, &path)?;
+    Ok(path)
+}
+
+/// Generate an installable SNO ISO
+fn build_iso(o: BuildISOOpts) -> Result<()> {
+    let new_install_cmd =
+        || cmd_installer(o.install_run_opts.installer_version.as_deref(), false, None);
+    let stream_metadata: coreos_stream_metadata::Stream = {
+        let mut cmd = new_install_cmd();
+        cmd.args(["coreos", "print-stream-json"]);
+        let o = cmd.output()?;
+        let st = o.status;
+        if !st.success() {
+            anyhow::bail!("Failed to get stream metadata: {st:?}");
+        }
+        serde_json::from_slice(&o.stdout)?
+    };
+    let thisarch_str = coreos_stream_metadata::this_architecture();
+    let thisarch_iso = stream_metadata
+        .query_disk(thisarch_str, "metal", "iso")
+        .ok_or_else(|| anyhow::anyhow!("Missing ISO"))?;
+
+    let isopath = if let Some(iso) = o.src_iso {
+        iso.into()
+    } else {
+        ensure_iso(thisarch_iso)?
+    };
+
+    let mut config: InstallConfig = if let Some(config_path) = o.config {
+        let config = fs::File::open(config_path).map(io::BufReader::new)?;
+        serde_yaml::from_reader(config)?
+    } else {
+        serde_yaml::from_str(BASE_SNO_CONFIG)?
+    };
+
+    if config.bootstrap_in_place.is_none() {
+        config.bootstrap_in_place = Some(BootstrapInPlace {
+            installation_disk: o.target_disk.clone(),
+        });
+    }
+
+    require_pull_secret(&mut config)?;
+
+    if config.ssh_key.is_none() {
+        if let Some(keypath) = o.ssh_key_path.as_deref() {
+            let pubk =
+                std::fs::read_to_string(keypath).with_context(|| format!("Reading {keypath}"))?;
+            config.ssh_key = Some(pubk)
+        } else {
+            eprintln!("notice: No ssh key provided");
+        }
+    }
+
+    let output_dir = Path::new(o.output_dir.as_str());
+    if !output_dir.exists() {
+        std::fs::create_dir(output_dir).with_context(|| format!("Creating {output_dir:?}"))?;
+    }
+    let tempdir = tempfile::tempdir_in(output_dir)?;
+    let tempdir = tempdir.path();
+
+    {
+        let mut w =
+            fs::File::create(tempdir.join("install-config.yaml")).map(io::BufWriter::new)?;
+        serde_yaml::to_writer(&mut w, &config)?;
+        w.flush()?;
+    }
+
+    {
+        let mut cmd = new_install_cmd();
+        cmd.arg("version");
+        run_installer(&mut cmd)?;
+    }
+
+    // TODO support manifests
+
+    let mut cmd = new_install_cmd();
+    cmd.args(["create", "single-node-ignition-config", "--dir"]);
+    cmd.arg(tempdir);
+    if o.install_run_opts.log_debug {
+        cmd.arg("--log-level=debug");
+    }
+    run_installer(&mut cmd)?;
+    let bip_ign_name = "bootstrap-in-place-for-live-iso.ign";
+    let bip_ign_path = tempdir.join(bip_ign_name);
+    let (bip_ign, _warnings) = {
+        let c = std::fs::read_to_string(&bip_ign_path)?;
+        ignition_config::Config::parse_str(&c).with_context(|| format!("Parsing {bip_ign_name}"))?
+    };
+
+    let name = config
+        .metadata
+        .as_ref()
+        .expect("cluster name")
+        .name
+        .as_str();
+    let isoname = format!("{name}.iso");
+    println!("Copying ISO to {isoname}");
+    let tmp_isopath = tempdir.join(isoname.as_str());
+    std::fs::copy(&isopath, &tmp_isopath).context("Copying source ISO to {tmp_isopath:?}")?;
+    println!("Embedding Ignition config {bip_ign_name}");
+    let st = Command::new("coreos-installer")
+        .args(["iso", "ignition", "embed", "--ignition-file"])
+        .arg(bip_ign_path)
+        .arg(&tmp_isopath)
+        .status()?;
+    if !st.success() {
+        anyhow::bail!("Failed to embed Ignition config: {st:?}");
+    }
+    for p in [isoname.as_str(), "auth/kubeconfig"] {
+        let p = Path::new(p);
+        let dest = p.file_name().unwrap();
+        std::fs::rename(tempdir.join(p), output_dir.join(dest))?;
+    }
+
+    {
+        let install_path = config
+            .bootstrap_in_place
+            .as_ref()
+            .unwrap()
+            .installation_disk
+            .as_str();
+        let install_name = Path::new(install_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        if let Some(rest) = install_name.strip_prefix("virtio-") {
+            println!("To install with libvirt, use e.g. --disk size=240,serial={rest}")
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure base configdir, and get the path to a cluster
 fn get_clusterdir(name: &str) -> Result<Box<std::path::Path>> {
     fs::create_dir_all(APPDIRS.config_dir())?;
@@ -796,6 +1026,9 @@ fn main() -> Result<()> {
         }
         Opt::Launch(o) => {
             launch(o)?;
+        }
+        Opt::BuildISO(o) => {
+            build_iso(o)?;
         }
         Opt::Destroy {
             name,

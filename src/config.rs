@@ -5,7 +5,7 @@ use serde_json::json;
 pub(crate) static AUTOLOGIN_CONFIG: &str = r###"
 {
   "ignition": {
-    "version": "2.2.0"
+    "version": "3.0.0"
   },
   "systemd": {
     "units": [
