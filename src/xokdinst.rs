@@ -708,10 +708,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         Err(e) => {
             match (|| -> Result<()> {
                 let p = clusterdir.join(FAILED_STAMP_PATH);
-                let mut f = std::io::BufWriter::new(std::fs::File::create(p)?);
-                let e = e.to_string();
-                f.write(e.as_bytes())?;
-                f.flush()?;
+                std::fs::write(p, e.to_string())?;
                 Ok(())
             })() {
                 Ok(_) => {}
