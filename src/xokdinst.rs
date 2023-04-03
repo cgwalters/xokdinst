@@ -474,7 +474,7 @@ fn print_clusters() -> Result<()> {
         println!("No clusters.");
     } else {
         let mut tw = TabWriter::new(std::io::stdout());
-        tw.write("NAME\tPLATFORM\tSTATUS\n".as_bytes())?;
+        tw.write_all("NAME\tPLATFORM\tSTATUS\n".as_bytes())?;
         for v in clusters.iter() {
             let clusterdir = APPDIRS.config_dir().join(v.as_str());
             let config = get_launched_config(&clusterdir)?;
@@ -492,7 +492,7 @@ fn print_clusters() -> Result<()> {
             } else {
                 "unknown"
             };
-            tw.write(format!("{}\t{}\t{}\n", v, platform, state).as_bytes())?;
+            tw.write_all(format!("{}\t{}\t{}\n", v, platform, state).as_bytes())?;
         }
         tw.flush()?;
     }
