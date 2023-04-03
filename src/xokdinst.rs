@@ -9,7 +9,7 @@ use structopt::StructOpt;
 #[macro_use]
 extern crate clap;
 use anyhow::{bail, Context, Result};
-use directories;
+
 use lazy_static::lazy_static;
 use serde_derive::{Deserialize, Serialize};
 use sys_info::{cpu_num, mem_info};
@@ -23,7 +23,7 @@ lazy_static! {
 }
 
 // Stolen from https://github.com/openshift/installer/commit/e26c1989707927018631213e63528d4d0a08e793
-static SINGLE_MASTER_CONFIGS: [&'static str; 2] = [
+static SINGLE_MASTER_CONFIGS: [&str; 2] = [
     r###"
 apiVersion: operator.openshift.io/v1
 kind: Etcd
@@ -277,7 +277,7 @@ fn get_master_mem(libvirt_auto_size: bool, size: u64) -> u64 {
                 "Failed to get total host memory, falling back to {}MB: {}",
                 default, e
             );
-            return default;
+            default
         }
         Ok(mem) => cmp::max(4096, (mem.avail - (4 * size + 2) * 1024 * 1024) / 1024),
     }
@@ -295,7 +295,7 @@ fn get_master_cpu(libvirt_auto_size: bool, size: u32) -> u32 {
                 "Failed to get total host cpu, falling back to {}cpu: {}",
                 default, e
             );
-            return default;
+            default
         }
         Ok(cpu) => cmp::max(2, cpu - (2 * size)),
     }
@@ -353,7 +353,7 @@ fn get_config_name(name: &Option<String>, platform: &Platform) -> String {
 /// Create a config-X.yaml
 fn generate_config(o: GenConfigOpts) -> Result<String> {
     if let Some(name) = o.name.as_ref() {
-        let path = APPDIRS.config_dir().join(&name);
+        let path = APPDIRS.config_dir().join(name);
         if !o.overwrite && path.exists() {
             bail!(
                 "Configuration '{}' already exists and overwrite not specified",
@@ -365,11 +365,11 @@ fn generate_config(o: GenConfigOpts) -> Result<String> {
     let tmpd = tempfile::Builder::new().prefix("xokdinst").tempdir()?;
     println!("Executing `openshift-install create install-config`");
     let mut cmd = cmd_installer(
-        o.installer_version.as_ref().map(|s| s.as_str()),
+        o.installer_version.as_deref(),
         o.libvirt_auto_size,
         None,
     );
-    cmd.args(&["create", "install-config", "--dir"]);
+    cmd.args(["create", "install-config", "--dir"]);
     cmd.arg(tmpd.path());
     run_installer(&mut cmd)?;
 
@@ -470,7 +470,7 @@ fn get_latest_release(release_stream: &str) -> Result<String> {
 
 fn print_clusters() -> Result<()> {
     let clusters = get_clusters()?;
-    if clusters.len() == 0 {
+    if clusters.is_empty() {
         println!("No clusters.");
     } else {
         let mut tw = TabWriter::new(std::io::stdout());
@@ -500,7 +500,7 @@ fn print_clusters() -> Result<()> {
 }
 
 fn print_list(header: &str, l: &[String]) {
-    if l.len() == 0 {
+    if l.is_empty() {
         println!("No {}.", header);
     } else {
         for v in l.iter() {
@@ -512,9 +512,7 @@ fn print_list(header: &str, l: &[String]) {
 fn cmd_launch_installer(o: &LaunchOpts) -> std::process::Command {
     let installer_version = o
         .install_run_opts
-        .installer_version
-        .as_ref()
-        .map(|x| x.as_str());
+        .installer_version.as_deref();
     let mut cmd = cmd_installer(
         installer_version,
         o.install_run_opts.libvirt_auto_size,
@@ -546,7 +544,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         destroy(&o.name, true, o.install_run_opts.log_debug)?;
     }
     let configs = get_configs()?;
-    let config_name = if o.config.is_none() && configs.len() == 0 {
+    let config_name = if o.config.is_none() && configs.is_empty() {
         println!("No configurations found; generating one now");
         Cow::Owned(generate_config(GenConfigOpts {
             name: None,
@@ -555,22 +553,18 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             libvirt_auto_size: false,
         })?)
     } else if let Some(platform) = o.platform.as_ref() {
-        Cow::Owned(get_config_name(&None, &platform))
+        Cow::Owned(get_config_name(&None, platform))
+    } else if let Some(name) = o.config.as_ref() {
+        Cow::Borrowed(name)
+    } else if configs.len() == 1 {
+        Cow::Borrowed(&configs[0])
     } else {
-        if let Some(name) = o.config.as_ref() {
-            Cow::Borrowed(name)
-        } else if configs.len() == 1 {
-            Cow::Borrowed(&configs[0])
-        } else {
-            bail!("Have multiple configs, and no config specified")
-        }
+        bail!("Have multiple configs, and no config specified")
     };
     let full_name = Cow::Owned(format!("config-{}.yaml", config_name));
     let config_path: Option<_> = [&config_name, &full_name]
         .iter()
-        .map(|c| APPDIRS.config_dir().join(c.as_str()))
-        .filter(|c| c.exists())
-        .next();
+        .map(|c| APPDIRS.config_dir().join(c.as_str())).find(|c| c.exists());
     let config_path = match config_path {
         Some(x) => x,
         None => bail!("No such configuration: {}", config_name),
@@ -641,7 +635,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     {
         // https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
         let mut cmd = cmd_launch_installer(&o);
-        cmd.args(&["create", "manifests", "--dir"]);
+        cmd.args(["create", "manifests", "--dir"]);
         cmd.arg(&clusterdir);
         println!("Running create manifests");
         run_installer(&mut cmd)?;
@@ -663,7 +657,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
                     None => continue,
                 };
                 let dest = Path::new(&openshiftdir).join(name);
-                std::fs::copy(&f.path(), dest).context("Failed to copy manifest")?;
+                std::fs::copy(f.path(), dest).context("Failed to copy manifest")?;
                 copied.push(name.to_string());
             }
             if copied.is_empty() {
@@ -694,7 +688,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
                     let c: serde_json::Value = serde_json::from_str(config::AUTOLOGIN_CONFIG)?;
                     let v = config::machineconfig_from_ign_for_role(&c, "autologin", role);
                     let p = openshiftdir.join(format!("autologin-{}.json", role));
-                    let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
+                    let mut f = std::io::BufWriter::new(std::fs::File::create(p)?);
                     serde_json::to_writer_pretty(&mut f, &v)?;
                 }
             }
@@ -703,10 +697,10 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
     }
 
     let mut cmd = cmd_launch_installer(&o);
-    cmd.args(&["create", "cluster", "--dir"]);
+    cmd.args(["create", "cluster", "--dir"]);
     cmd.arg(&clusterdir);
     if o.install_run_opts.log_debug {
-        cmd.arg(format!("--log-level=debug"));
+        cmd.arg("--log-level=debug");
     }
     println!("Executing `openshift-install create cluster`");
     match run_installer(&mut cmd) {
@@ -714,7 +708,7 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         Err(e) => {
             match (|| -> Result<()> {
                 let p = clusterdir.join(FAILED_STAMP_PATH);
-                let mut f = std::io::BufWriter::new(std::fs::File::create(&p)?);
+                let mut f = std::io::BufWriter::new(std::fs::File::create(p)?);
                 let e = e.to_string();
                 f.write(e.as_bytes())?;
                 f.flush()?;
@@ -746,7 +740,7 @@ fn destroy(name: &str, force: bool, debug: bool) -> Result<()> {
     let launch_opts = get_launched_config(&clusterdir)?;
     let mut cmd = if let Some(ref launch_opts) = launch_opts {
         cmd_installer(
-            launch_opts.installer_version.as_ref().map(|s| s.as_str()),
+            launch_opts.installer_version.as_deref(),
             launch_opts.libvirt_auto_size,
             None,
         )
@@ -760,9 +754,9 @@ fn destroy(name: &str, force: bool, debug: bool) -> Result<()> {
     let has_metadata = clusterdir.join(METADATA_PATH).exists();
     let failed = clusterdir.join(FAILED_STAMP_PATH).exists();
     if has_metadata {
-        cmd.args(&["destroy", "cluster", "--dir"]);
+        cmd.args(["destroy", "cluster", "--dir"]);
         if debug {
-            cmd.arg(format!("--log-level=debug"));
+            cmd.arg("--log-level=debug");
         }
         cmd.arg(&*clusterdir);
         println!("Executing `openshift-install destroy cluster`");
@@ -794,7 +788,7 @@ fn main() -> Result<()> {
         }
         Opt::ListConfigs => {
             let configs = get_configs()?;
-            print_list("configs", &configs.as_slice());
+            print_list("configs", configs.as_slice());
         }
         Opt::List => {
             print_clusters()?;
