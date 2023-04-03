@@ -52,6 +52,10 @@ static METADATA_PATH: &str = "metadata.json";
 /// Relative path in home to credentials used to authenticate to registries
 /// The podman stack uses a different path by default but will honor this
 /// one if it exists.
+static CONTAINER_AUTH_PATH: &str = ".config/containers/auth.json";
+/// Relative path in home to credentials used to authenticate to registries
+/// The podman stack uses a different path by default but will honor this
+/// one if it exists.
 static DOCKERCFG_PATH: &str = ".docker/config.json";
 
 /// Holds extra keys from a map we didn't explicitly parse
@@ -590,20 +594,25 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         }];
     }
 
-    // If there's no pull secret, automatically use ~/.docker/config.json
+    // If there's no pull secret, automatically use container config
     if config.pull_secret.is_none() {
         let dirs = match directories::BaseDirs::new() {
             Some(x) => x,
             None => bail!("No HOME found"),
         };
-        let dockercfg_path = dirs.home_dir().join(DOCKERCFG_PATH);
-        if !dockercfg_path.exists() {
-            bail!(
-                "No pull secret in install config, and no {} found",
-                DOCKERCFG_PATH
-            );
+        let mut auth_path = None;
+        for path in [DOCKERCFG_PATH, CONTAINER_AUTH_PATH] {
+            let path = dirs.home_dir().join(path);
+            if path.exists() {
+                auth_path = Some(path)
+            }
         }
-        let pull_secret = std::fs::read_to_string(dockercfg_path)?;
+        let auth_path = auth_path.ok_or_else(|| {
+            anyhow::anyhow!(
+                "No pull secret in install config, and no per-user container auth found"
+            )
+        })?;
+        let pull_secret = std::fs::read_to_string(auth_path)?;
         config.pull_secret = Some(pull_secret);
     }
 
