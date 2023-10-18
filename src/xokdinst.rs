@@ -189,7 +189,7 @@ struct LaunchOpts {
     /// Inject objects during installation (e.g. MachineConfig)
     /// See https://github.com/openshift/installer/blob/master/docs/user/customization.md#kubernetes-customization-unvalidated
     #[structopt(long = "manifests")]
-    manifests: Option<String>,
+    manifests: Vec<String>,
 
     /// Cluster size
     #[structopt(
@@ -648,9 +648,9 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
         if !openshiftdir.exists() {
             std::fs::create_dir(&openshiftdir)?;
         }
-        if let Some(ref manifests) = o.manifests {
+        for path in &o.manifests {
             let mut copied: Vec<String> = Vec::new();
-            for f in std::fs::read_dir(manifests).context("Failed to read manifests directory")? {
+            for f in std::fs::read_dir(path).context("Failed to read manifests directory")? {
                 let f = f?;
                 if !f.file_type()?.is_file() {
                     continue;
@@ -667,10 +667,10 @@ fn launch(mut o: LaunchOpts) -> Result<()> {
             if copied.is_empty() {
                 bail!(
                     "No regular files found in additional manifests directory: {}",
-                    manifests
+                    path,
                 );
             }
-            println!("Copied custom manifests:");
+            println!("Copied custom manifests from {}", path);
             for f in copied {
                 println!("  {}", f);
             }
